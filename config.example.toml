@@ -1,0 +1,9 @@
+[plugin]
+config_version = "1.0.0"
+enabled = true
+
+[workspace]
+# 同时挂载到 MaiBot 和插件 Runner；每个路径组件均不允许是符号链接。
+root = "/srv/maibot-agent"
+max_file_bytes = 52428800
+max_batch_files = 8
