@@ -1,0 +1,23 @@
+{
+  "manifest_version": 2,
+  "id": "github.MemoryController.maibot-dsh-artifacts",
+  "version": "0.1.0",
+  "name": "DSH 文件桥接",
+  "description": "在真实聊天工具作用域内桥接 DSH 共享工作区与 MaiBot 聊天文件库",
+  "author": {
+    "name": "MemoryController",
+    "url": "https://github.com/MemoryController"
+  },
+  "license": "MIT",
+  "urls": {
+    "repository": "https://github.com/MemoryController/maibot-dsh-artifacts",
+    "homepage": "https://github.com/MemoryController/maibot-dsh-artifacts",
+    "documentation": "https://github.com/MemoryController/maibot-dsh-artifacts/blob/main/README.md",
+    "issues": "https://github.com/MemoryController/maibot-dsh-artifacts/issues"
+  },
+  "host_application": {"min_version": "1.3.18", "max_version": "1.3.18"},
+  "sdk": {"min_version": "2.19.0", "max_version": "2.19.0"},
+  "dependencies": [],
+  "capabilities": ["files.upload", "files.download", "files.send"],
+  "i18n": {"default_locale": "zh-CN", "supported_locales": ["zh-CN"]}
+}

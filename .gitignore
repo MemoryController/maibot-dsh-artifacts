@@ -9,3 +9,7 @@ config.toml
 .env.*
 !.env.example
 *.log
+.coverage
+htmlcov/
+build/
+dist/
