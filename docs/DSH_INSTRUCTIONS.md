@@ -2,6 +2,22 @@
 
 这是普通文档，可复制到 DSH 的现有任务说明或本地提示文件；不是需要安装的 DSH 插件，也不假设存在任何新的 DSH Skill API。正式环境保持原版 MaiBot v1.3.18。
 
+## 0.2.1 受控确认：无可信自动回传目标时
+
+可选的 [dsh-maibot-artifacts](https://github.com/MemoryController/dsh-maibot-artifacts) Cordis 插件会将准备好的**严格 manifest v1 原始 JSON**保存到共享根的 `outbox/.dsh-handoffs/<task_id>.json`，并返回 `task_id` 和 `request_sha256`。SHA-256 必须对应该文件的准确字节，不可重新格式化后沿用旧哈希。
+
+用户在原聊天明确要求 MaiBot 实际调用：
+
+```text
+请在本原聊天调用 dsh_import_request，task_id=<DSH 返回的任务标识>，
+request_sha256=<DSH 返回的请求字节哈希>；只导入，不发送。
+请报告真实工具结果、逐项 file_ref；unknown/unconfirmed 不自动重试。
+```
+
+这会调用现有交接内核，在该次 Host 工具 scope 内制作私有快照、验证清单与产物、去重并上传。不会后台继续，也不提供目标聊天参数。哈希只确认内容，不能授权或自动识别原聊天。不要在别的聊天执行，不从 manifest、文件内容或模型伪造的 session_id 猜目标。DSH 侧仍不得根据确认指引或自己写的回执宣称已经入库；真实入库结果由原聊天工具回执和 `files_list` 核对。丢失回执时只读调用 `dsh_handoff_status(task_id)`，不换任务 ID 重做。
+
+旧 0.2.0 仍可使用下面的完整清单 `dsh_import_handoff` 手动路径；`dsh_import_request` 需要 peer 插件升级到 0.2.1，并保留新增 `request.py`。
+
 ## 给 DSH 的规则
 
 > 文件全部放在配置共享目录 `/srv/maibot-agent` 内。读取 MaiBot 导出的 `inbox/...`；把产物写到 `outbox/...`。只交接已写完且不再修改的普通文件，不能使用符号链接、硬链接源或特殊文件。

@@ -151,12 +151,12 @@ async def test_official_sdk_manifest_and_pure_plugin_install_without_host(tmp_pa
     root = Path(__file__).resolve().parents[1]
     destination = tmp_path / "plugins" / "maibot-dsh-artifacts"
     destination.mkdir(parents=True)
-    for name in ("plugin.py", "handoff.py", "safe_files.py", "_manifest.json"):
+    for name in ("plugin.py", "handoff.py", "request.py", "safe_files.py", "_manifest.json"):
         shutil.copyfile(root / name, destination / name)
     # This install has no Host source, patch, installer or external service.
     assert not list(tmp_path.rglob("host.patch"))
     assert not (tmp_path / "src").exists()
-    for name in ("plugin.py", "handoff.py", "safe_files.py"):
+    for name in ("plugin.py", "handoff.py", "request.py", "safe_files.py"):
         tree = ast.parse((destination / name).read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
@@ -179,7 +179,46 @@ async def test_official_sdk_manifest_and_pure_plugin_install_without_host(tmp_pa
     plugin.set_plugin_config({"plugin": {"config_version": "1.0.0"}, "workspace": {"root": str(workspace)}})
     await plugin.on_load()  # Runs without Host sources or a file-capability scope.
     assert plugin.get_components()
-    for tool in ("dsh_import_handoff", "dsh_handoff_status"):
+    for tool in ("dsh_import_request", "dsh_import_handoff", "dsh_handoff_status"):
         info = getattr(installed.DSHArtifactsPlugin, tool).__maibot_component_info__
         assert info.metadata["visibility"] == "visible"
         assert "session_id" not in info.get_parameters_schema()["properties"]
+
+
+@pytest.mark.asyncio
+async def test_controlled_request_tool_uses_same_handoff_core_and_no_send(stock):
+    manifest = manifest_for(stock)
+    payload = json.dumps(manifest, ensure_ascii=False).encode()
+    directory = stock.root / "outbox" / ".dsh-handoffs"
+    directory.mkdir()
+    (directory / f'{manifest["task_id"]}.json').write_bytes(payload)
+    sha = hashlib.sha256(payload).hexdigest()
+    # Ordinary kwargs do not select the Host scope or enable delivery.
+    result = await stock.plugin.dsh_import_request(
+        manifest["task_id"], sha, chat_id="forged-chat", session_id="forged-session", send=True
+    )
+    assert result["registered"] == "confirmed" and result["delivery"] == "not_requested"
+    assert all(item["file"]["file_ref"] for item in result["items"])
+    assert stock.files.upload.await_count == 2
+    stock.files.send.assert_not_awaited()
+    replay = await stock.plugin.dsh_import_handoff(manifest)
+    assert replay["cached"] is True and stock.files.upload.await_count == 2
+    info = stock.plugin.dsh_import_request.__maibot_component_info__
+    schema = info.get_parameters_schema()
+    assert set(schema["properties"]) == set(schema["required"]) == {"task_id", "request_sha256"}
+
+
+@pytest.mark.asyncio
+async def test_disabled_controlled_request_never_uses_file_capability(stock):
+    stock.plugin.set_plugin_config({"plugin": {"config_version": "1.0.0", "enabled": False}})
+    result = await stock.plugin.dsh_import_request("a" * 32, "0" * 64)
+    assert result["error"]["code"] == "disabled"
+    stock.files.list.assert_not_awaited()
+    stock.files.upload.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_controlled_request_wrapper_refuses_missing_hash(stock):
+    with pytest.raises(TypeError):
+        await stock.plugin.dsh_import_request("a" * 32)
+    stock.files.upload.assert_not_awaited()

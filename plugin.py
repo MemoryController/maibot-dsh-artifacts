@@ -11,6 +11,7 @@ from maibot_sdk import Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
 from .handoff import Handoff
+from .request import import_request
 from .safe_files import SafetyError, Workspace
 
 
@@ -73,6 +74,34 @@ class DSHArtifactsPlugin(MaiBotPlugin):
             max_file_bytes=self.config.workspace.max_file_bytes,
             max_batch_files=self.config.workspace.max_batch_files,
         )
+
+    @Tool(
+        "dsh_import_request",
+        brief_description="确认 DSH 请求文件的准确哈希，在当前真实聊天导入产物；不发送。",
+        detailed_description=(
+            "仅在任务的原聊天，经用户确认后调用。DSH 提供 task_id 和 request_sha256，"
+            "本工具只读取 outbox/.dsh-handoffs/<task_id>.json 并核对原始字节 SHA-256。"
+            "哈希和 task_id 只确认请求内容，不授予聊天身份；当前真实 Host 文件作用域决定入库聊天。"
+            "不接受文件路径、聊天 ID、target 或 send，不自动选择原聊天，不发送 QQ 文件。"
+            "复用 dsh_import_handoff 的账本与校验；实际 file_ref 才表示入库。"
+            "unknown/unconfirmed 不得自动重试或换 task_id；回执丢失在原聊天查询 dsh_handoff_status。"
+        ),
+        parameters=[
+            ToolParameterInfo(name="task_id", description="DSH 返回的 32 位小写十六进制任务标识"),
+            ToolParameterInfo(
+                name="request_sha256", description="DSH 返回的请求文件原始字节 SHA-256，64 位小写十六进制"
+            ),
+        ],
+        visibility="visible",
+        timeout_ms=1800000,
+    )
+    async def dsh_import_request(self, task_id: str, request_sha256: str, **kwargs: Any) -> dict[str, Any]:
+        if not self.config.plugin.enabled:
+            return {"success": False, "state": "unconfirmed", "error": {"code": "disabled"}}
+        try:
+            return await import_request(self._handoff(), task_id, request_sha256)
+        except Exception as exc:
+            return {"success": False, "state": "unconfirmed", "error": _error(exc)}
 
     @Tool(
         "dsh_import_handoff",

@@ -1,6 +1,6 @@
 # 官方接口调查与验证边界
 
-正式版本 0.2.0 使用原版 MaiBot 插件能力，不应用 Host 补丁。固定源码依据：
+正式版本 0.2.1 使用原版 MaiBot 插件能力，不应用 Host 补丁。协议基准为本仓库 `ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8`（0.2.0），本次调查远端 main 仍为该提交，无更新差异。0.2.1 增加请求文件确认入口，manifest v1、现有 Handoff 内核与账本格式不变。固定源码依据：
 
 | 项目 | 提交 |
 | --- | --- |
@@ -12,7 +12,7 @@ manifest v2 仅声明已核对 Host/SDK 版本及实际需要的 files.list/uplo
 
 ## 原版 ACP 及文本交接
 
-[`acp_agent.py:132`](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/src/agent/acp_agent.py#L132) 创建 ACP MCP 服务时只注册 AgentToolProvider、ComputerToolProvider、FileToolProvider，没有第三方 PluginToolProvider。DSH 不能直接调用本插件四个工具。[`mcp_server.py:44`](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/src/agent/mcp_server.py#L44) 使用独立 Agent 上下文列出/执行工具；内置文件工具也不能据此取得原聊天附件权限。
+[`acp_agent.py:132`](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/src/agent/acp_agent.py#L132) 创建 ACP MCP 服务时只注册 AgentToolProvider、ComputerToolProvider、FileToolProvider，没有第三方 PluginToolProvider。DSH 不能直接调用本插件工具。[`mcp_server.py:44`](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/src/agent/mcp_server.py#L44) 使用独立 Agent 上下文列出/执行工具；内置文件工具也不能据此取得原聊天附件权限。
 
 正式链路：
 
@@ -22,6 +22,8 @@ manifest v2 仅声明已核对 Host/SDK 版本及实际需要的 files.list/uplo
 4. [`runtime.py:1343`](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/src/maisaka/runtime.py#L1343) 注册 PluginToolProvider；模型实际选工具后才派发插件调用。
 
 CLI/manifest 规范参数，不消除模型选工具步骤；relay 只输出参数，DSH 须实际调用已有 MCP agent_talk。prepared、排队成功、tool_called、上传返回 file_ref、发送 sent 是不同证据。
+
+0.2.1 的受控降级由用户回到原聊天，明确选择 `dsh_import_request(task_id, request_sha256)`。新增 [request.py](../request.py) 只解析固定 `outbox/.dsh-handoffs/<task_id>.json` 的 ≤64 KiB 私有快照，验证准确字节哈希、严格清单、任务标识后，在同次真实调用内复用 `Handoff.import_manifest(..., send=False)`。没有新后台文件权限、可信目标服务或自创 Host 适配器。普通随机 nonce 或请求哈希不能证明原聊天；工具描述及文档要求原聊天明确确认。DSH 不把共享目录内可伪造的 JSON 当官方入库回执。
 
 ## 事件与 Hook 为什么不能自动上传
 
@@ -68,16 +70,17 @@ SnowLuma 文件须结构化登记。Host [`integration.py:378`](https://github.c
 
 文件能力默认关闭、HTTP 通道独立于 WebUI及 unknown 语义见官方 [docs/file-service.md](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/docs/file-service.md)。SDK download 没有客户端 max_bytes 参数，插件导出限额在下载完成后检查；Host 配额和暂存空间仍必要。
 
-本机 Python 3.12 实际运行正式全套 **242 passed，无失败、无跳过**，Ruff 全仓通过：
+本机 Python 3.12 实际运行正式全套 **286 passed，无失败、无跳过**，Ruff 全仓通过：
 
 | 范围 | 数量 | 验证方式 |
 | --- | ---: | --- |
 | 原文件安全及插件回归 | 103 | 安全模块 57 + 原插件 46，临时文件系统与 SDK mock |
 | 纯插件交接账本 | 83 | 严格清单、快照哈希、claim/未知状态、缓存权限、只读重放、独立哨兵等 |
 | DSH helper | 48 | 标准库 CLI、清单准备/relay 参数、实际子进程调用，包含不加载 site 的运行检查 |
-| 新插件/安装接线 | 8 | 装饰器/调用接线及原版 SDK 安装路径，不应用 Host 补丁 |
+| 请求文件确认 | 41 | 实际 request/Handoff/SQLite/安全快照，聊天 scope double；严格 JSON、哈希、任务、路径链接、大小、篡改、并发、重启和 unknown 不重传 |
+| 新插件/安装接线 | 11 | 装饰器/调用接线及原版 SDK 安装路径，不应用 Host 补丁 |
 
-原版 MaiBot v1.3.18 官方 ManifestValidator 对新 0.2.0 manifest 实际校验通过，无 errors/warnings。安装测试实际把四个插件运行文件复制到**不存在任何 Host 源码**的临时 plugins 目录，以真实 SDK 完成 import/create_plugin/on_load，证明普通安装不依赖 Host 改动。所有 ctx.files API 测试使用 mock，不是实际 Host 文件服务、DSH 或 QQ 集成。
+原版 MaiBot v1.3.18 官方 ManifestValidator 对 0.2.1 manifest 实际校验通过，无 errors/warnings。安装测试实际把五个插件运行文件复制到**不存在任何 Host 源码**的临时 plugins 目录，以真实 SDK 完成 import/create_plugin/on_load，证明普通安装不依赖 Host 改动。所有 ctx.files API 测试使用 mock，不是实际 Host 文件服务、DSH 或 QQ 集成。
 
 本轮没有运行旧 Host 补丁实验，也没有修改官方源码。历史实验测试留在 integrations 下，不混入默认 pytest/CI。CI 配置 Python 3.10/3.12，但本机只执行 3.12；未据配置宣称 3.10 或远端 CI 已通过。
 

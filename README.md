@@ -2,7 +2,7 @@
 
 MaiBot + DSH 的文件桥接插件：将 DSH 在共享目录生成的图片、PDF、压缩包等二进制产物登记为**当前聊天的正式附件**，也可把当前聊天已有附件导出给 DSH。
 
-正式版本 **0.2.0** 适配原版 **MaiBot v1.3.18**、**maibot-plugin-sdk v2.19.0**，使用 [MIT](LICENSE)。无需修改 MaiBot 源码、应用 Host 补丁、重建修改源码的镜像或安装 DSH 扩展；无需 Docker Socket、root、管理员 Token 或额外 HTTP 服务。manifest 暂仅声明已核对的版本，不外推后续版本兼容性。未发布正式 Release 或申请插件中心收录。
+正式版本 **0.2.1** 适配原版 **MaiBot v1.3.18**、**maibot-plugin-sdk v2.19.0**，使用 [MIT](LICENSE)。无需修改 MaiBot 源码、应用 Host 补丁或重建修改源码的镜像；可使用标准库 CLI，也可配合可选的 [DSH Cordis 插件](https://github.com/MemoryController/dsh-maibot-artifacts)。无需 Docker Socket、root、管理员 Token 或额外 HTTP 服务。manifest 暂仅声明已核对的版本，不外推后续版本兼容性。未发布正式 Release 或申请插件中心收录。
 
 ## 工作方式与限制
 
@@ -28,6 +28,8 @@ DSH 产物 → 共享 outbox → CLI 生成 manifest
 | 发送返回 sent | 获得明确发送回执；unknown 可能稍后投递，禁止自动重发 |
 
 CLI 的 `relay` 只输出 `agent_talk` 参数，**不会自己调用 MCP 或发送通知**。DSH 须实际执行现有 MaiBot MCP 的传话工具。
+
+DSH 官方接口不能提供可信原聊天目标时，0.2.1 支持**受控确认**：DSH 将严格清单写到 `outbox/.dsh-handoffs/<task_id>.json`，给出准确的请求字节 SHA-256；用户回到原聊天明确调用 `dsh_import_request(task_id, request_sha256)`。该真实 Host 工具调用复用现有交接内核与文件 scope，返回实际 `file_ref`。它不自动路由、不后台上传、不调用 QQ 发送；哈希只确认请求内容，不是聊天授权。
 
 ## 安装与配置
 
@@ -55,6 +57,20 @@ CLI 的 `relay` 只输出 `agent_talk` 参数，**不会自己调用 MCP 或发�
 ## 工具
 
 以下均由**原聊天 MaiBot**在 Host 派发的真实工具作用域中执行，不是 DSH 可直接调用的 ACP 工具或 shell 命令。
+
+### `dsh_import_request(task_id, request_sha256)`：受控确认
+
+DSH 插件准备文件后会返回这两个实值。由用户在任务的原聊天明确要求执行：
+
+```json
+{"task_id":"0123456789abcdef0123456789abcdef","request_sha256":"<DSH 返回的 64 位小写十六进制请求哈希>"}
+```
+
+工具只读取共享根下固定的 `outbox/.dsh-handoffs/<task_id>.json`，不接受任意路径。使用现有逐级无符号链接读取与私有快照，限制 64 KiB，拒绝硬链接、特殊文件及读取竞态。先核对快照**原始字节** SHA-256，再校验严格 manifest v1 和 task_id 一致，最后调用与 `dsh_import_handoff` 相同的 `Handoff.import_manifest(..., send=False)`。
+
+两种导入入口共享同一持久账本；重复任务只核对已授权结果，不重复上传。此工具没有 `send`、`target`、`chat_id` 或 `session_id` 参数。请求文件、内容哈希和 task_id 都不能证明聊天身份；**调用发生在哪个真实聊天，就只可能向该聊天入库，因此必须由原聊天用户确认**。不要把本工具包装成自动识别原聊天的流程。
+
+只有实际工具结果中的逐项 `file_ref` 才证明入库；DSH 的 prepared、确认指引或共享目录中的自称回执都不是入库证据。回执丢失时在原聊天调用 `dsh_handoff_status(task_id)`，核对原调用记录与 `files_list`。`unknown/unconfirmed` 不自动重试、不换 ID 重新上传。
 
 ### `dsh_import(paths, send=false)`：直接导入
 
@@ -148,7 +164,7 @@ python3 -m venv .venv
 .venv/bin/python -m ruff check .
 ```
 
-本机 Python 3.12 正式全套 **242 项通过，无失败、无跳过**：原安全/插件回归 103（57+46）、纯插件 handoff 83、DSH helper 48、新插件/安装接线 8；Ruff 全仓通过。原版 v1.3.18 官方 ManifestValidator 校验 0.2.0 清单通过，无 errors/warnings。实际安装测试在没有 Host 源码的临时 plugins 目录复制四个插件运行文件，使用真实 SDK import/create_plugin/on_load 成功；文件 API 均为 mock，不代表真实 MaiBot/DSH/QQ 集成。完整依据见[兼容说明](docs/compatibility.md)。Python 3.10 仅配置 CI，本机未运行，远端结果以 CI 记录为准。
+本机 Python 3.12 正式全套 **286 项通过，无失败、无跳过**：原安全/插件回归 103（57+46）、纯插件 handoff 83、DSH helper 48、请求文件确认 41、新插件/安装接线 11；Ruff 全仓通过。原版 v1.3.18 官方 ManifestValidator 校验 0.2.1 清单通过，无 errors/warnings。实际安装测试在没有 Host 源码的临时 plugins 目录复制五个插件运行文件，使用真实 SDK import/create_plugin/on_load 成功。请求确认集成测试执行实际 `request.py`、`Handoff`、SQLite 账本和安全快照；文件 API 使用聊天 scope double，不代表真实 MaiBot HTTP/DSH/QQ 集成。完整依据见[兼容说明](docs/compatibility.md)。Python 3.10 仅配置 CI，本机未运行，远端结果以 CI 记录为准。
 
 `integrations/` 中保留的 Host 补丁是历史实验，**不支持部署，不属于正式安装步骤**；默认 pytest/CI 不运行实验测试。本轮未运行旧 Host 实验，也未修改官方源码。不要使用生产源码或数据作测试目标。
 

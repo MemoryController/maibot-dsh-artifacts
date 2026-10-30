@@ -20,6 +20,8 @@ services:
 
 将本仓库完整放入实际实例 `plugins/maibot-dsh-artifacts/`，不要只复制 plugin.py。若 Runner 在另一容器/进程环境，插件与工作区也必须在其实际文件系统可见。确认插件 SDK 版本、入口加载状态与能力授权。
 
+0.2.1 的受控确认入口还需要根目录 `request.py`。DSH 在共享 `outbox/.dsh-handoffs/` 保存严格清单请求；MaiBot 只读这些请求，并将其安全复制到自己的私有 runtime 目录检查。给 Runner 读取权限，避免为方便而开放 777。没有可信自动回传目标时，由用户在原聊天调用 `dsh_import_request(task_id, request_sha256)`；不需要新增服务、管理员 Token 或任何 MaiBot 核心改动。
+
 宿主机目录：
 
 ```fish
