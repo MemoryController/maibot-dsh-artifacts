@@ -1,8 +1,10 @@
 # maibot-dsh-artifacts
 
-MaiBot 的 DSH 文件桥接插件：把 DSH 生成的普通文件导入**当前聊天**的官方文件库，也可把当前聊天已有的附件导出给 DSH。二进制文件、中文文件名和批量导入均受支持，文件字节通过官方 `ctx.files` 传输。
+MaiBot 的 DSH 文件桥接插件：把 DSH 生成的普通文件导入**当前聊天**的官方文件库，也可把当前聊天已有的附件导出给 DSH。二进制文件、中文文件名和批量导入均受支持，插件文件字节通过官方 `ctx.files` 传输。
 
-本版为 `0.1.0`，许可证为 [MIT](LICENSE)。已核对 MaiBot **v1.3.18** 和 `maibot-plugin-sdk` **v2.19.0** 的源码；manifest 暂仅声明这两个已核对版本。项目要求 SDK 不低于 2.19.0，尚未验证后续 SDK/Host 版本。未发布正式 Release，也未申请插件中心收录。
+仓库另提供一个**可选、默认关闭、必须人工应用的 MaiBot v1.3.18 Host 扩展**：让 DSH 使用专用 MCP 工具直接交接产物，Host 按原任务绑定的真实聊天入库，无需原聊天 Planner 再次选插件工具。[安装及使用说明](integrations/maibot_1_3_18/README.md)。它不是单靠安装插件就生效的功能，也不意味着完整 DSH/QQ 环境已验证。
+
+插件本版为 `0.1.0`，插件与新写集成模块使用 [MIT](LICENSE)。Host 补丁中的上游 MaiBot 上下文及修改保留 GPL-3.0 许可，见[集成许可说明](integrations/maibot_1_3_18/NOTICE.md)和[上游许可证副本](integrations/maibot_1_3_18/COPYING.MaiBot)。已核对 MaiBot **v1.3.18** 和 `maibot-plugin-sdk` **v2.19.0** 的源码；manifest 暂仅声明这两个已核对版本。项目要求 SDK 不低于 2.19.0，尚未验证后续 SDK/Host 版本。未发布正式 Release，也未申请插件中心收录。
 
 ## 工作方式与范围
 
@@ -12,9 +14,11 @@ DSH → outbox/ → agent_talk 文本交接 → 原聊天 Planner → dsh_import
     → 官方文件库上传 → file_ref → files_list / files_send
 ```
 
-**DSH 无法直接调用这个插件的工具。** v1.3.18 的 ACP MCP 服务没有注册第三方 `PluginToolProvider`；原聊天运行时才有。`agent_talk` 仅将文本交接给原聊天 Planner，不会直接执行插件，不保证模型必然选择工具。详见[源码核对与验证边界](docs/compatibility.md)。
+**未应用可选扩展的原版 v1.3.18 中，DSH 无法直接调用这个插件的工具。** ACP MCP 服务没有注册第三方 `PluginToolProvider`；原聊天运行时才有。`agent_talk` 仅将文本交接给原聊天 Planner，不会直接执行插件，不保证模型必然选择工具。详见[源码核对与验证边界](docs/compatibility.md)。
 
-插件只提供两个 `@Tool`，不提供 HTTP 服务、目录监听、后台自动上传、shell 执行或自动解压。无需 Docker Socket、root、MaiBot WebUI 管理员 Token，也不修改 MaiBot 主项目。
+插件只提供两个 `@Tool`，不提供 HTTP 服务、目录监听、后台自动上传、shell 执行或自动解压。无需 Docker Socket、root、MaiBot WebUI 管理员 Token。普通插件安装不改 MaiBot 主项目；可选扩展则是独立交付的 Host 源码补丁，只有部署者检查、备份并显式应用后才生效。
+
+可选扩展的链路为：`原聊天 agent_talk → Host 绑定任务和授权 → ACP prompt 告知 DSH → agent_artifact_handoff → Host FileService.create/send → 原聊天文件库`。DSH 只获准交接 `outbox/<Host签发的task_id>/` 中一个批次的文件，不能指定聊天；发送还要求 Host 全局许可与原聊天本任务的双重授权。持久账本阻止重放和自动恢复不确定操作，属于 **at-most-once 尝试**，不承诺 exactly-once 投递。详见[扩展文档](integrations/maibot_1_3_18/README.md)。
 
 ## 安装与配置
 
@@ -157,7 +161,9 @@ end
 
 本插件将工具声明为 `visibility="visible"`，方便原聊天 Planner 直接看到；这仍不能保证自动选择。请在**原聊天**明确要求：“调用 `dsh_import`，参数 `{"paths":["outbox/task-001/结果.txt"],"send":false}`，报告实际工具返回的 `file_ref`。”检查真实工具记录和结果。若部署方将工具改成 deferred，应先通过 `tool_search` 发现工具。
 
-需要完全不依赖模型的人工操作时，可由管理员在官方 WebUI「文件」页面**选择原聊天**后上传/下载/发送。插件不接收、保存或使用管理员 Token。当前 Host 没有给普通插件命令/API 提供等同工具的临时文件作用域，因此本版不提供伪装成确定性入口的 `/dsh_import` QQ 命令。自动执行保证需要 Host 的正式支持，不能通过伪造 `session_id` 或后台任务实现。
+需要完全不依赖模型的人工操作时，可由管理员在官方 WebUI「文件」页面**选择原聊天**后上传/下载/发送。插件不接收、保存或使用管理员 Token。原版 Host 没有给普通插件命令/API 提供等同工具的临时文件作用域，因此本版不提供伪装成确定性入口的 `/dsh_import` QQ 命令。
+
+希望省掉“DSH 完成后原聊天模型再次选择插件工具”这一步，可评估[专用 Host 扩展](integrations/maibot_1_3_18/README.md)。扩展通过可信 Host 任务授权和专用 provider 调用 Host 文件服务，既不伪造 `session_id`，也不绕用插件 `_file_scope`。它仍要求 DSH 实际调用交接工具，不会监听文件或替模型生成工具调用。
 
 ## 安全边界
 
@@ -190,19 +196,29 @@ end
 3. 显式发送，核对 QQ 回执与文件内容；出现 `unknown` 时人工确认，不自动重试。
 4. 用另一个聊天尝试原文件引用，确认 Host 拒绝；验证越权路径、已存在目标和权限不足也被拒绝。
 
-截至本版，以上真实环境步骤尚未在 MaiBot + DSH + QQ 部署中验证；没有宣称模型自动交接、SnowLuma 入站登记或 QQ 实际投递已经完成实机验收。
+截至本版，以上真实环境步骤尚未在 MaiBot + DSH + QQ 部署中验证；没有宣称模型自动交接、SnowLuma 入站登记或 QQ 实际投递已经完成实机验收。可选扩展的组件测试与实机验收边界单独记录在[集成文档](integrations/maibot_1_3_18/README.md)。
 
 ## 开发与测试
 
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q --ignore=tests/host_integration --ignore=tests/test_host_patch.py
 .venv/bin/python -m ruff check .
 ```
 
-本机 Python 3.12 实际执行 **103 项测试全部通过**（57 项文件安全测试、46 项插件测试），Ruff 全仓检查通过；切换至 PyPI 发布的真实 SDK 2.19.0 wheel 后再次执行，同样 103 项通过。MaiBot v1.3.18 官方 `ManifestValidator` 校验清单通过，无 error/warning。
+本机 Python 3.12 使用真实 PyPI SDK 2.19.0 wheel，完整执行 **299 项全部通过，无失败、无跳过**：原插件回归 103、交接 core 149、provider 28、安装器/补丁 13、真实 Host 组件 6。Ruff 全仓检查通过，MaiBot v1.3.18 官方 `ManifestValidator` 校验清单通过，无 error/warning。
 
-测试不需要 root、真实 QQ、DSH、Docker、WebUI Token 或网络服务。CI 配置执行 pytest/Ruff 并包含 Python 3.10；Python 3.10 及远端 GitHub Actions 的实际结果须以 CI 记录为准，本机仅验证 Python 3.12。请勿提交实际 `config.toml`、`.env`、密钥、聊天记录、生成文件或个人路径。
+Host 组件覆盖真实 FileService / FileStore / ToolRegistry + SQLite、一次官方 MCP 1.28.1 loopback 协议交接及实际补丁 ACP 方法；聊天发现与 QQ 发送边界仍使用 mock。13 项安装器/补丁测试不代表启动了完整 Host。以上均不代表 SSH、真实 DSH、SnowLuma QQ 全链路通过，分层依据见[兼容说明](docs/compatibility.md)。
+
+需要运行 Host 补丁与组件测试时，另外安装测试依赖并提供独立、未修改的固定 Host 源码：
+
+```bash
+.venv/bin/python -m pip install -r requirements-host-test.txt
+git clone --depth 1 --branch v1.3.18 https://github.com/Mai-with-u/MaiBot.git /tmp/maibot-v1.3.18
+MAIBOT_SOURCE_PATH=/tmp/maibot-v1.3.18 .venv/bin/python -m pytest -q
+```
+
+没有 `MAIBOT_SOURCE_PATH` 时相关测试会跳过，不能据此宣称 Host 集成通过。测试在临时源码副本和数据目录中操作，不应把生产路径用作测试目标。无需 root、真实 QQ、DSH、Docker、WebUI Token 或外部在线服务；MCP 组件测试会暂时监听本机回环地址。CI 的普通测试矩阵包含 Python 3.10/3.12，Host 组件 job 使用 3.12；远端实际结果须以 CI 记录为准，本机仅验证 Python 3.12。请勿提交实际 `config.toml`、`.env`、密钥、聊天记录、生成文件或个人路径。
 
 兼容性来源、各接口权限及自动化局限见 [docs/compatibility.md](docs/compatibility.md)。欢迎通过 [Issues](https://github.com/MemoryController/maibot-dsh-artifacts/issues) 提交去除敏感信息的复现步骤。

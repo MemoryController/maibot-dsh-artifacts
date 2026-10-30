@@ -1,0 +1,245 @@
+--- a/src/agent/config.py
++++ b/src/agent/config.py
+@@ -62,6 +62,24 @@
+     acp_model: str = Field(default="", json_schema_extra={"label": {"zh_CN": "ACP 模型选项"}, "advanced": True})
+     """留空使用外部 Agent 自身模型配置；填写时必须是其 model 配置选项公布的值，不使用本体 planner 回退。"""
+ 
++    artifact_handoff_enabled: bool = Field(default=False)
++    """显式启用专用 ACP 文件交接；不会向 ACP 暴露其他插件工具。"""
++
++    artifact_workspace: str = Field(default="/srv/maibot-agent")
++    """Host 与 DSH 共享的真实目录；生成文件只能位于 outbox/<task_id>/。"""
++
++    artifact_max_file_bytes: int = Field(default=52428800, ge=1, le=1073741824)
++    """交接单文件字节上限；Host 文件服务的实时上限仍生效。"""
++
++    artifact_max_batch_files: int = Field(default=8, ge=1, le=32)
++    """一个任务只接受一个批次，最多的文件数。"""
++
++    artifact_ttl_seconds: int = Field(default=3600, ge=60, le=86400)
++    """任务凭证有效期，自原聊天入队时计时，不自动续期。"""
++
++    artifact_allow_send: bool = Field(default=False)
++    """允许原聊天用 agent_talk(artifact_send=true) 授予该任务自动发送权限。"""
++
+     acp_timeout: float = Field(default=60, gt=0, json_schema_extra={"label": {"zh_CN": "ACP 连接与关停超时（秒）"}, "advanced": True})
+     """握手、会话恢复和取消确认的等待时间，不限制任务执行时长。"""
+ 
+--- a/src/agent/acp_agent.py
++++ b/src/agent/acp_agent.py
+@@ -25,6 +25,8 @@
+ )
+ 
+ from .acp import ACPConnection, ACPRequestError, desktop_manifest, session_cwd
++from .artifact_handoff import StreamRedactor, redact_tokens
++from .artifact_provider import ArtifactToolProvider, create_broker, task_prompt
+ from .history import AgentHistory
+ from .mcp_server import ToolMCPServer
+ 
+@@ -60,6 +62,8 @@
+         self.mcp: Optional[ToolMCPServer] = None
+         self.capabilities: Dict[str, Any] = {}
+         self._connected_session_id: Optional[str] = None
++        self.artifacts = create_broker(service, self.config)
++        self._artifact_streams = {kind: StreamRedactor() for kind in ("agent_message_chunk", "agent_thought_chunk")}
+ 
+     async def load(self) -> None:
+         await asyncio.to_thread(self.history.load)
+@@ -80,8 +84,10 @@
+ 
+     async def enqueue(
+         self, text: str, images: Sequence[ImageComponent] = (), *,
+-        kind: Literal["user", "system"] = "user", reply_to: str = "",
++        kind: Literal["user", "system"] = "user", reply_to: str = "", artifact_send: bool = False,
+     ) -> str:
++        if type(artifact_send) is not bool or (artifact_send and (not reply_to or self.artifacts is None)):
++            raise ValueError("该任务不能请求文件发送授权")
+         builder = ContextItemBuilder().add_text_content(text)
+         for image in images:
+             # 接口中的图片已校验、存入工作区；上下文直接带实际图像。
+@@ -96,6 +102,10 @@
+         record = await self.record(kind, [builder.build()])
+         if reply_to:
+             record["reply_to"] = reply_to
++            if self.artifacts is not None:
++                # reply_to 只来自 Host 已验证的普通聊天，不从外部 Agent 的参数/文本取归属。
++                await self.artifacts.issue(record["id"], reply_to, send_allowed=artifact_send)
++                record["artifact_task_id"] = record["id"]
+         self.inbox.append(record)
+         await self.save()
+         if kind == "user":
+@@ -130,7 +140,8 @@
+         from .provider import AgentToolProvider
+ 
+         self.mcp = ToolMCPServer(
+-            [AgentToolProvider(self.service), ComputerToolProvider(self.service.computer, visible=True), FileToolProvider()],
++            [AgentToolProvider(self.service), ComputerToolProvider(self.service.computer, visible=True),
++             FileToolProvider(), ArtifactToolProvider(self)],
+             self.service.agent_id, self.config.acp_timeout, port=self.config.mcp_port,
+         )
+         self.connection = ACPConnection(self._update)
+@@ -153,10 +164,13 @@
+     async def _update(self, params: Dict[str, Any]) -> None:
+         if params["sessionId"] != self.backend_state.get("session_id"):
+             return
++        params = redact_tokens(params)
+         update = params["update"]
+         kind = update["sessionUpdate"]
+         if kind in {"agent_message_chunk", "agent_thought_chunk"}:
+             content = update["content"]
++            if self.artifacts is not None and content["type"] == "text":
++                content["text"] = self._artifact_streams[kind].feed(content["text"])
+             if content["type"] == "text" and content["text"]:
+                 meta = ContextItemMeta.create(logical_turn_id=str(update.get("messageId", params["sessionId"])))
+                 # 流式片段必须原样保存；完整响应的归一化会吞掉片段间的空格和换行。
+@@ -212,7 +226,6 @@
+             batch = list(self.inbox)
+             if not batch:
+                 return
+-            items = await asyncio.to_thread(self.history.unpack, [item for record in batch for item in record["items"]])
+             prompt = []
+             # ACP prompt 传递接入说明，不冒充外部 harness 的系统消息。
+             # 按内容同步，旧会话及能力/人格资料变更后也能收到最新说明。
+@@ -221,14 +234,20 @@
+             if self.backend_state.get("policy") != policy_key:
+                 prompt.append({"type": "text", "text": policy})
+             prompt.append({"type": "text", "text": await self.service.context()})
+-            for item in items:
+-                for part in item.parts:
+-                    if isinstance(part, ContextImagePart):
+-                        if not self.capabilities.get("promptCapabilities", {}).get("image", False):
+-                            raise ValueError("ACP 当前模型路由未声明图片输入能力，任务保留在队列中")
+-                        prompt.append({"type": "image", "data": part.image_base64, "mimeType": "image/" + part.image_format})
+-                    elif isinstance(part, ContextTextPart):
+-                        prompt.append({"type": "text", "text": part.text})
++            for record in batch:
++                # 授权仅进入 ACP prompt，不进入原聊天或持久 rollout；紧邻对应任务正文。
++                grant_text = await task_prompt(self, record)
++                if grant_text:
++                    prompt.append({"type": "text", "text": grant_text})
++                items = await asyncio.to_thread(self.history.unpack, record["items"])
++                for item in items:
++                    for part in item.parts:
++                        if isinstance(part, ContextImagePart):
++                            if not self.capabilities.get("promptCapabilities", {}).get("image", False):
++                                raise ValueError("ACP 当前模型路由未声明图片输入能力，任务保留在队列中")
++                            prompt.append({"type": "image", "data": part.image_base64, "mimeType": "image/" + part.image_format})
++                        elif isinstance(part, ContextTextPart):
++                            prompt.append({"type": "text", "text": part.text})
+             self.pending = {"input_ids": [record["id"] for record in batch]}
+             await self.save()
+             for record in batch:
+@@ -265,6 +284,12 @@
+                 # 已收到最终回执，保留输出并清除在途标记；报告单轮失败，不重发原任务。
+                 raise AgentTurnError(f"外接 Agent 未正常完成：{result['stopReason']}，已有输出已保留，原任务不会自动重发", batch)
+         finally:
++            if self.artifacts is not None:
++                for redactor in self._artifact_streams.values():
++                    tail = redactor.flush()
++                    if tail:
++                        item = ContextItemBuilder().set_role(RoleType.Assistant).add_text_content(tail).build()
++                        await self.history.append(await self.record("step", [item]))
+             self.state = "idle"
+ 
+     async def close(self) -> None:
+--- a/src/agent/provider.py
++++ b/src/agent/provider.py
+@@ -18,6 +18,8 @@
+     definitions = [
+         ("agent_talk", "与独立 Agent 双向图文传话。普通聊天 target 留空；Agent 回信填写 agent_chats 返回的真实 session_id。回执表示入队并触发 Planner，不代表已经向 IM 发言。", {
+             "text": {"type": "string"}, "target": {"type": "string"},
++            "artifact_send": {"type": "boolean", "default": False,
++                              "description": "仅原聊天显式授权本任务交接后发送；需开启 Host artifact_allow_send。"},
+             "images": {"type": "array", "items": {"type": "string"}, "description": "普通聊天填写当前带图消息 ID 或图片 hash；Agent 填工作目录图片路径。启用桌面时可填 screenshot 或 C:\\MaiWorkspace 内的图片路径。"},
+         }, ["text"]),
+         ("agent_status", "查看 Agent 后端及运行状态，include_image=true 可读取已启用桌面的最近截图。", {
+@@ -64,7 +66,8 @@
+                 self.service.require_owner(context.session_id)
+             result: Dict[str, Any]
+             if name == "agent_talk":
+-                result = await messaging.tell(self.service, context.session_id, args["text"], args.get("target", ""), args.get("images", []))
++                result = await messaging.tell(self.service, context.session_id, args["text"], args.get("target", ""), args.get("images", []),
++                                              artifact_send=args.get("artifact_send", False))
+             elif name == "agent_status":
+                 result = self.service.status()
+                 if args.get("include_image", False) and self.service.computer.config.enabled and self.service.computer.bridge.last_frame is not None:
+--- a/src/agent/messaging.py
++++ b/src/agent/messaging.py
+@@ -60,15 +60,22 @@
+ 
+ async def tell(
+     service: "AgentService", caller: str, text: str, target: str = "",
+-    images: Optional[List[str]] = None,
++    images: Optional[List[str]] = None, *, artifact_send: bool = False,
+ ) -> Dict[str, Any]:
+     from .images import resolve_images
+ 
++    if type(artifact_send) is not bool:
++        raise ValueError("artifact_send 必须为布尔值")
+     agent = service.require_agent()
+     if not text.strip() and not images:
+         raise ValueError("传话内容不能为空。")
+     from_agent = caller == service.agent_id
+     if from_agent:
++        if artifact_send:
++            raise PermissionError("外部 Agent 不能签发发送授权")
++        from .artifact_handoff import redact_tokens
++
++        text = redact_tokens(text)
+         resolve_chat(target)
+     else:
+         resolve_chat(caller)
+@@ -88,7 +95,7 @@
+         runtime = await heartflow_manager.get_or_create_heartflow_chat(target)
+         receipt = runtime.enqueue_internal_task(source_kind=service.relay_kind, text=relay_text, reason=service.name + "传话", images=media)
+     else:
+-        receipt = {"task_id": await agent.enqueue(relay_text, media, reply_to=caller), "queued": True,
++        receipt = {"task_id": await agent.enqueue(relay_text, media, reply_to=caller, artifact_send=artifact_send), "queued": True,
+                    "paused": service.paused}
+         if service.paused:
+             receipt["error"] = service.error
+--- a/src/agent/acp.py
++++ b/src/agent/acp.py
+@@ -12,6 +12,7 @@
+ 
+ from src.common.logger import get_logger
+ 
++from .artifact_handoff import redact_tokens
+ from .config import AgentConfig
+ 
+ logger = get_logger("agent.acp")
+@@ -38,8 +39,8 @@
+     """对端已返回请求错误，与断线或超时导致的结果未知区分。"""
+ 
+     def __init__(self, error: Dict[str, Any]) -> None:
+-        self.error = error
+-        super().__init__("ACP: " + json.dumps(error, ensure_ascii=False))
++        self.error = redact_tokens(error)
++        super().__init__("ACP: " + json.dumps(self.error, ensure_ascii=False))
+ 
+ 
+ class ACPConnection:
+@@ -55,11 +56,13 @@
+         self._sequence = 0
+         self._write_lock = asyncio.Lock()
+         self.failure: Optional[Exception] = None
++        self._sensitive_artifacts = False
+ 
+     async def initialize(
+         self, config: AgentConfig, cwd: Path, client_name: str, *, mcp_port: Optional[int] = None,
+     ) -> Dict[str, Any]:
+         """两种 ACP 使用方共用连接选择和握手，业务状态由各自保存。"""
++        self._sensitive_artifacts = config.artifact_handoff_enabled
+         if config.connection == "dsh_desktop":
+             await self.connect_desktop(desktop_manifest(config), config.acp_timeout)
+         else:
+@@ -169,7 +172,8 @@
+ 
+     async def _read_errors(self) -> None:
+         while line := await self.process.stderr.readline():
+-            text = line.decode("utf-8", errors="replace").rstrip()
++            text = ("[stderr suppressed in artifact handoff mode]" if self._sensitive_artifacts else
++                    redact_tokens(line.decode("utf-8", errors="replace").rstrip()))
+             self._errors.append(text)
+             logger.info("ACP stderr: %s", text)
+ 

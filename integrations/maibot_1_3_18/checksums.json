@@ -1,0 +1,25 @@
+{
+  "commit": "2a9af62cec37035d29237acbe2cf3adceb700b27",
+  "files": {
+    "src/agent/config.py": {
+      "before": "51e8ec44840d65557035020c00fa61577e99491415309dca9141e391746e2d3f",
+      "after": "22985f997785355e08e0f81f6a94e7964abc7932e4e75e0699f75daa7105ad77"
+    },
+    "src/agent/acp_agent.py": {
+      "before": "896374fc0fae3b31884b3049e7590eece9dde08dcbbf1beb9a332bf386f68522",
+      "after": "e2858016688a7c946fe5542af904945cd7eca8afb2928bebc7670fc6ed8fc8a3"
+    },
+    "src/agent/provider.py": {
+      "before": "fe08fc8edbf8dbaeb2c7a389e2d951cde36168f1552d9233793c2db56d1322bc",
+      "after": "36457fe5782e29b578ffea680dd7f614254ab8fac262eaabbd27eab7848c333c"
+    },
+    "src/agent/messaging.py": {
+      "before": "98eb425c46d3120ada6e66ef2ca767318dc9edc621c20fc4ca767c3125ae60ea",
+      "after": "e05949a91586ed5f11fdb4213179384e465836ed03261489167a029d283db768"
+    },
+    "src/agent/acp.py": {
+      "before": "4efcf9b4b8f11cbbd86bf5319e6adfc54c6e06f724e42c8911457b23521a29f5",
+      "after": "0d9396d59981ef6cd7d6854841ffb375a04bc605a7a75b7c95e3f5d77908ddfa"
+    }
+  }
+}
