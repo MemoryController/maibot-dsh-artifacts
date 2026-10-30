@@ -48,3 +48,31 @@ jobs:
           DSH_ARTIFACTS_SOURCE: ${{ runner.temp }}/dsh-producer
           DSH_ARTIFACTS_COMMIT: ${{ matrix.dsh-commit }}
         run: python -m pytest -q protocol_checks/dsh_protocol.py
+
+  stock-host-components:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: python -m pip install -r requirements-dev.txt -r host_checks/requirements.txt
+      - name: Fetch unmodified pinned component sources
+        run: |
+          git clone --no-checkout https://github.com/Mai-with-u/MaiBot.git "$RUNNER_TEMP/stock-maibot"
+          git -C "$RUNNER_TEMP/stock-maibot" checkout --detach 2a9af62cec37035d29237acbe2cf3adceb700b27
+          git clone --no-checkout https://github.com/MemoryController/dsh-maibot-artifacts.git "$RUNNER_TEMP/stock-dsh"
+          git -C "$RUNNER_TEMP/stock-dsh" checkout --detach f008cdc039122d360dee67b86e1e2004083ba019
+      - name: Isolated Host components, test-issued scopes, no ACP or QQ
+        env:
+          MAIBOT_SOURCE_PATH: ${{ runner.temp }}/stock-maibot
+          DSH_ARTIFACTS_SOURCE: ${{ runner.temp }}/stock-dsh
+        run: python -m pytest -q host_checks/stock_files.py
+      - name: Official checkouts stay unchanged
+        run: |
+          test -z "$(git -C "$RUNNER_TEMP/stock-maibot" status --porcelain)"
+          test -z "$(git -C "$RUNNER_TEMP/stock-dsh" status --porcelain)"

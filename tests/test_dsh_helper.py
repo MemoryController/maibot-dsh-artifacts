@@ -237,3 +237,99 @@ def test_cli_relay_failure_has_no_stdout(workspace):
     assert result.returncode == 1
     assert result.stdout == b""
     assert b"error:" in result.stderr
+
+
+def publish_request(helper, workspace, *, content=None):
+    prepared = manifest(helper, workspace)
+    raw = json.dumps(prepared, ensure_ascii=False).encode() if content is None else content
+    put(workspace, f"outbox/.dsh-handoffs/{prepared['task_id']}.json", raw)
+    return prepared["task_id"], hashlib.sha256(raw).hexdigest()
+
+
+def test_request_relay_uses_exact_confirmed_bytes_without_sdk(helper, workspace):
+    task, sha = publish_request(helper, workspace)
+    result = run_helper(
+        "relay-request", "--root", workspace, "--task-id", task, "--request-sha256", sha, "--target", "original-route"
+    )
+    assert result.returncode == 0, result.stderr
+    relay = json.loads(result.stdout)
+    assert set(relay) == {"target", "text"}
+    assert relay["target"] == "original-route"
+    instruction = json.loads(relay["text"].split("\n", 1)[1])
+    assert instruction == {"tool": "dsh_import_request", "arguments": {"task_id": task, "request_sha256": sha}}
+    assert "仅在这是本聊天发起的任务" in relay["text"]
+    assert "不证明原聊天身份或用户授权" in relay["text"]
+    assert "unknown/unconfirmed" in relay["text"]
+    assert "prepared_only" in result.stderr.decode()
+    assert "未执行 agent_talk，未登记或发送文件" in result.stderr.decode()
+    # No Host ledger, receipt or upload artifact is created by this stdlib CLI.
+    assert sorted(path.name for path in workspace.iterdir()) == ["outbox"]
+
+
+@pytest.mark.parametrize("target", ["", " ", "route\nother", "route\x00", "route\x7f", "x" * 2049, None])
+def test_request_relay_rejects_bad_route_without_reading_request(helper, workspace, target):
+    with pytest.raises(ValueError):
+        helper.request_relay_arguments(workspace, "a" * 32, "b" * 64, target)
+
+
+@pytest.mark.parametrize("sha", ["", "A" * 64, "g" * 64, "a" * 63, None, "0" * 64])
+def test_request_relay_never_recomputes_an_explicit_hash_to_make_it_pass(helper, workspace, sha):
+    task, _ = publish_request(helper, workspace)
+    with pytest.raises(ValueError):
+        helper.request_relay_arguments(workspace, task, sha, "original-route")
+
+
+def test_request_relay_does_not_infer_a_task_or_fall_back_when_missing(helper, workspace):
+    publish_request(helper, workspace)
+    with pytest.raises(FileNotFoundError):
+        helper.request_relay_arguments(workspace, "b" * 32, "0" * 64, "original-route")
+    result = run_helper("relay-request", "--root", workspace, "--target", "original-route")
+    assert result.returncode == 2 and result.stdout == b""
+
+
+@pytest.mark.parametrize("relative", ["../secret", "/etc/passwd", "outbox/../secret", "a", "A" * 32])
+def test_request_relay_rejects_path_like_task_identifiers(helper, workspace, relative):
+    with pytest.raises(ValueError):
+        helper.request_relay_arguments(workspace, relative, "a" * 64, "original-route")
+
+
+def test_request_relay_rejects_symlink_even_if_contents_match(helper, workspace):
+    task, sha = publish_request(helper, workspace)
+    request = workspace / f"outbox/.dsh-handoffs/{task}.json"
+    source = workspace / "outbox/job/source.json"
+    request.rename(source)
+    request.symlink_to(source)
+    result = run_helper(
+        "relay-request", "--root", workspace, "--task-id", task, "--request-sha256", sha, "--target", "original-route"
+    )
+    assert result.returncode == 1 and result.stdout == b""
+    assert "prepared_only" in result.stderr.decode()
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b" " * (64 * 1024 + 1), b'{"task_id":null,"task_id":null}', b'{"size":NaN}', b"[" * 2000, b"\xff"],
+)
+def test_request_relay_invalid_request_never_emits_parameters(helper, workspace, content):
+    task, sha = publish_request(helper, workspace, content=content)
+    result = run_helper(
+        "relay-request", "--root", workspace, "--task-id", task, "--request-sha256", sha, "--target", "original-route"
+    )
+    assert result.returncode == 1 and result.stdout == b""
+    assert "error:" in result.stderr.decode()
+    assert "Traceback" not in result.stderr.decode()
+
+
+def test_request_relay_task_mismatch_cannot_select_another_request(helper, workspace):
+    task, sha = publish_request(helper, workspace)
+    request = workspace / f"outbox/.dsh-handoffs/{task}.json"
+    request.rename(request.with_name("b" * 32 + ".json"))
+    with pytest.raises(ValueError):
+        helper.request_relay_arguments(workspace, "b" * 32, sha, "original-route")
+
+
+def test_relay_deep_json_is_a_clean_cli_error(workspace):
+    relative = put(workspace, "outbox/job/nested.json", b"[" * 2000)
+    result = run_helper("relay", "--root", workspace, "--manifest", relative, "--target", "original-route")
+    assert result.returncode == 1 and result.stdout == b""
+    assert b"Traceback" not in result.stderr
