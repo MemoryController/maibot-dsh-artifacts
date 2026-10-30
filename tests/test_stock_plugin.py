@@ -191,7 +191,7 @@ async def test_controlled_request_tool_uses_same_handoff_core_and_no_send(stock)
     payload = json.dumps(manifest, ensure_ascii=False).encode()
     directory = stock.root / "outbox" / ".dsh-handoffs"
     directory.mkdir()
-    (directory / f'{manifest["task_id"]}.json').write_bytes(payload)
+    (directory / f"{manifest['task_id']}.json").write_bytes(payload)
     sha = hashlib.sha256(payload).hexdigest()
     # Ordinary kwargs do not select the Host scope or enable delivery.
     result = await stock.plugin.dsh_import_request(
@@ -213,6 +213,8 @@ async def test_disabled_controlled_request_never_uses_file_capability(stock):
     stock.plugin.set_plugin_config({"plugin": {"config_version": "1.0.0", "enabled": False}})
     result = await stock.plugin.dsh_import_request("a" * 32, "0" * 64)
     assert result["error"]["code"] == "disabled"
+    assert result["registered"] == "unconfirmed" and result["delivery"] == "not_requested"
+    assert result["tool_called"] is True
     stock.files.list.assert_not_awaited()
     stock.files.upload.assert_not_awaited()
 
@@ -222,3 +224,16 @@ async def test_controlled_request_wrapper_refuses_missing_hash(stock):
     with pytest.raises(TypeError):
         await stock.plugin.dsh_import_request("a" * 32)
     stock.files.upload.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_controlled_request_configuration_error_has_no_registration_evidence(stock):
+    stock.plugin._ctx.paths.data_dir = stock.root / "private"  # Private data cannot overlap shared workspace.
+    result = await stock.plugin.dsh_import_request("a" * 32, "0" * 64)
+    assert result["success"] is False and result["state"] == "unconfirmed"
+    assert result["tool_called"] is True
+    assert result["registered"] == "unconfirmed" and result["delivery"] == "not_requested"
+    assert str(stock.root) not in repr(result)
+    stock.files.list.assert_not_awaited()
+    stock.files.upload.assert_not_awaited()
+    stock.files.send.assert_not_awaited()

@@ -2,11 +2,23 @@
 
 这是普通文档，可复制到 DSH 的现有任务说明或本地提示文件；不是需要安装的 DSH 插件，也不假设存在任何新的 DSH Skill API。正式环境保持原版 MaiBot v1.3.18。
 
-## 0.2.1 受控确认：无可信自动回传目标时
+## Cordis 插件：先区分两端版本和确认模式
 
-可选的 [dsh-maibot-artifacts](https://github.com/MemoryController/dsh-maibot-artifacts) Cordis 插件会将准备好的**严格 manifest v1 原始 JSON**保存到共享根的 `outbox/.dsh-handoffs/<task_id>.json`，并返回 `task_id` 和 `request_sha256`。SHA-256 必须对应该文件的准确字节，不可重新格式化后沿用旧哈希。
+可选 [dsh-maibot-artifacts](https://github.com/MemoryController/dsh-maibot-artifacts) 当前 main 是插件包 **0.2.1**，固定提交 `f008cdc039122d360dee67b86e1e2004083ba019`；历史插件包 0.2.0 为 `0958d8ac788ebbea5f2c507f3b024de3dd06cb24`。没有据此创建 tag 或宣称 Release，核查时远端无 tags。插件包版本不等于 DSH CLI 版本：其要求 Linux、Node ≥24、DSH runtime **0.2.2-alpha.2**。先核对现有二进制，不另建/重置用户 runtime 或 ACP profile。
 
-用户在原聊天明确要求 MaiBot 实际调用：
+使用插件时，由 DSH 实际调用它自己的工具：
+
+```json
+{"tool":"maibot_artifact_prepare","arguments":{"paths":["outbox/task-001/结果.txt"]}}
+```
+
+保留真实返回的 manifest.task_id，再调用 `maibot_artifact_publish({"task_id":"实际ID"})`。正常发布会把**严格 manifest v1 原始 JSON**写到共享根 `outbox/.dsh-handoffs/<task_id>.json`。`result=submitted` 只表示请求文件已发布，MaiBot 登记仍 unconfirmed；DSH local_status 只查其私有本地记录。
+
+DSH 0.2.1 **默认 `confirmationMode: manifest`**，publish 返回 `confirmation.tool="dsh_import_handoff"`，arguments 含完整实际 manifest 与 `send:false`。用户从原任务执行记录取得这些参数，在**原聊天**明确要求 MaiBot 调用。这与已合并的 MaiBot 插件 main 0.2.0 和本 PR 0.2.1 都兼容，不能假定它已经通知或执行。
+
+只有确认 MaiBot 已安装本 PR 的 **0.2.1**、包含 `request.py` 和 `dsh_import_request` 后，才在 DSH 中显式选择 `confirmationMode: request`；此时 publish 的 confirmation.arguments 才是 task_id/request_sha256。旧 MaiBot 0.2.0 没有请求工具，不能配置该模式。历史 DSH 插件 0.2.0 默认给 request 参数，与本 PR 的字节协议兼容，但旧发布状态缺陷不推荐回滚使用；未知任务先核查，不能借回滚重发。
+
+request 模式用户在原聊天明确要求实际调用：
 
 ```text
 请在本原聊天调用 dsh_import_request，task_id=<DSH 返回的任务标识>，
@@ -14,9 +26,13 @@ request_sha256=<DSH 返回的请求字节哈希>；只导入，不发送。
 请报告真实工具结果、逐项 file_ref；unknown/unconfirmed 不自动重试。
 ```
 
-这会调用现有交接内核，在该次 Host 工具 scope 内制作私有快照、验证清单与产物、去重并上传。不会后台继续，也不提供目标聊天参数。哈希只确认内容，不能授权或自动识别原聊天。不要在别的聊天执行，不从 manifest、文件内容或模型伪造的 session_id 猜目标。DSH 侧仍不得根据确认指引或自己写的回执宣称已经入库；真实入库结果由原聊天工具回执和 `files_list` 核对。丢失回执时只读调用 `dsh_handoff_status(task_id)`，不换任务 ID 重做。
+请求 SHA 必须对应发布文件准确的原始 UTF-8 字节；不要重新格式化、加换行或改编码后沿用旧哈希。请求 ≤64 KiB，没有额外协议包装、聊天或发送字段。本工具在真实 Host 工具 scope 内读取安全快照、严格解析、核对任务与产物，再复用现有账本上传；不会后台继续，不接受目标聊天参数，固定不发送。
 
-旧 0.2.0 仍可使用下面的完整清单 `dsh_import_handoff` 手动路径；`dsh_import_request` 需要 peer 插件升级到 0.2.1，并保留新增 `request.py`。
+两种模式都要求原聊天用户明确确认。task_id、SHA 或 manifest 不能授权/自动识别原聊天，不从文件内容、模型 session_id 或共享 receipt JSON 猜身份、证明入库。只有实际官方工具回执的 file_ref，再由同聊天 files_list 核对，才确认登记；测试引用不是生产附件。丢失回执时只读查询 dsh_handoff_status，不换任务 ID 重做。完整矩阵见[兼容说明](compatibility.md)。
+
+SDK 2.19.0 没有本插件可核验的人类批准事件。“用户明确确认”是操作者与模型应遵守的策略，不能说代码已经证明取得人类批准。不要解析聊天历史或回传“已批准”文字当作授权；真实文件权限只由 Host scope 提供。
+
+下面是不安装 Cordis 插件时可选的标准库 CLI 路线；它生成完整 manifest，不会自动发布成 request 模式的固定请求文件，也不会自动调用 agent_talk。
 
 ## 给 DSH 的规则
 
@@ -112,6 +128,7 @@ text 内给原聊天的建议调用为：
 ## 检查结果与故障处理
 
 - prepared：脚本计算成功；没有通知/上传。relay 输出参数也仍属于准备阶段。
+- Cordis 本地 state 仅 prepared/queued/unknown；result=submitted 是共享发布结果，不是 state=submitted，更不是 MaiBot imported。local_status 不读取 MaiBot 文件库，不把共享 JSON 自称回执作为依据。
 - agent_talk delivered/queued：传话已排队；插件可能未调用，不能宣称文件已登记。
 - tool_called：检查插件返回；成功上传项应有真实 file_ref，再让当前聊天 files_list 确认。
 - 首次结果 registered=not_registered 表示所有项都确定在上传前失败；unknown 不能这样解释，partial 也不代表其他项均未执行。人工核查后只对最小必要范围决定新任务。
@@ -121,3 +138,5 @@ text 内给原聊天的建议调用为：
 - 上传异常/崩溃可能已有副作用，先核查原聊天。只有确认发生在上传前的失败，才由人按最小必要文件范围决定新任务，不能整批重做成功项。
 
 若原聊天模型漏调，把实际 agent_talk 回执、清单和工具名交给原聊天，明确要求执行并报告 file_ref。仍无法可靠选工具时，可由管理员使用官方 WebUI 文件页选择原聊天人工上传；不要伪造 session_id 或借后台任务绕过权限。
+
+本次验证为正式 Python 套件 303 项通过，另对固定 DSH 0.2.0/0.2.1 dist 各 6 项跨语言协议检查通过；Files API 是 scope double，未启动真实 DSH 对话、SSH 或 QQ。测试通过不表示上述生产流程已验收。

@@ -97,11 +97,25 @@ class DSHArtifactsPlugin(MaiBotPlugin):
     )
     async def dsh_import_request(self, task_id: str, request_sha256: str, **kwargs: Any) -> dict[str, Any]:
         if not self.config.plugin.enabled:
-            return {"success": False, "state": "unconfirmed", "error": {"code": "disabled"}}
+            return {
+                "success": False,
+                "state": "unconfirmed",
+                "tool_called": True,
+                "registered": "unconfirmed",
+                "delivery": "not_requested",
+                "error": {"code": "disabled"},
+            }
         try:
             return await import_request(self._handoff(), task_id, request_sha256)
         except Exception as exc:
-            return {"success": False, "state": "unconfirmed", "error": _error(exc)}
+            return {
+                "success": False,
+                "state": "unconfirmed",
+                "tool_called": True,
+                "registered": "unconfirmed",
+                "delivery": "not_requested",
+                "error": _error(exc),
+            }
 
     @Tool(
         "dsh_import_handoff",

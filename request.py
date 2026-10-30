@@ -45,6 +45,10 @@ def load_request(workspace: str, runtime_dir: Path, task_id: str, request_sha256
     if not isinstance(request_sha256, str) or _SHA.fullmatch(request_sha256) is None:
         raise SafetyError("invalid_request_sha256", "An explicit lowercase SHA-256 is required")
     relative = f"outbox/.dsh-handoffs/{task_id}.json"
+    # Apply the same trusted staging-parent policy as artifact snapshots before
+    # reading request bytes. A private child alone cannot protect a writable or
+    # symlinked runtime parent from directory substitution.
+    Handoff._directory(runtime_dir, False)
     with tempfile.TemporaryDirectory(prefix="dsh-request-", dir=runtime_dir) as stage:
         snapshot = Path(stage) / "request.json"
         with Workspace(workspace) as shared:
@@ -82,4 +86,12 @@ async def import_request(handoff: Handoff, task_id: str, request_sha256: str) ->
             "delivery": "not_requested",
             "error": {"code": code},
         }
-    return await handoff.import_manifest(manifest, send=False)
+    result = await handoff.import_manifest(manifest, send=False)
+    # Core argument/conflict errors can omit evidence fields. Keep the request
+    # tool's failure shape explicit without overriding conservative cache/scope
+    # results or implying that this invocation registered or sent anything.
+    result.setdefault("state", "unconfirmed")
+    result.setdefault("tool_called", True)
+    result.setdefault("registered", "unconfirmed")
+    result.setdefault("delivery", "not_requested")
+    return result

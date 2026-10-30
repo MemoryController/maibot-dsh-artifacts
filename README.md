@@ -2,7 +2,7 @@
 
 MaiBot + DSH 的文件桥接插件：将 DSH 在共享目录生成的图片、PDF、压缩包等二进制产物登记为**当前聊天的正式附件**，也可把当前聊天已有附件导出给 DSH。
 
-正式版本 **0.2.1** 适配原版 **MaiBot v1.3.18**、**maibot-plugin-sdk v2.19.0**，使用 [MIT](LICENSE)。无需修改 MaiBot 源码、应用 Host 补丁或重建修改源码的镜像；可使用标准库 CLI，也可配合可选的 [DSH Cordis 插件](https://github.com/MemoryController/dsh-maibot-artifacts)。无需 Docker Socket、root、管理员 Token 或额外 HTTP 服务。manifest 暂仅声明已核对的版本，不外推后续版本兼容性。未发布正式 Release 或申请插件中心收录。
+本 PR 的审核版本 **0.2.1** 适配原版 **MaiBot v1.3.18**、**maibot-plugin-sdk v2.19.0**，使用 [MIT](LICENSE)。无需修改 MaiBot 源码、应用 Host 补丁或重建修改源码的镜像；可使用标准库 CLI，也可配合可选的 [DSH Cordis 插件](https://github.com/MemoryController/dsh-maibot-artifacts)。无需 Docker Socket、root、管理员 Token 或额外 HTTP 服务。manifest 暂仅声明已核对的版本，不外推后续版本兼容性。包内版本号不代表已发布 Release；本仓库未发布正式 Release 或申请插件中心收录。
 
 ## 工作方式与限制
 
@@ -22,6 +22,7 @@ DSH 产物 → 共享 outbox → CLI 生成 manifest
 | 阶段 | 能证明什么 |
 | --- | --- |
 | prepared：CLI 生成清单 | 本地文件与大小/哈希已准备，尚未通知 MaiBot |
+| DSH bundle result=submitted | 共享请求已发布；不代表 MaiBot 收到、调用工具或入库 |
 | agent_talk 排队成功 | 传话已入队，尚未执行插件 |
 | tool_called：实际工具调用记录 | 原聊天调用了插件，仍可能校验或上传失败 |
 | 上传返回 file_ref | 已进入该调用真实聊天的文件库，可核对 files_list |
@@ -30,6 +31,21 @@ DSH 产物 → 共享 outbox → CLI 生成 manifest
 CLI 的 `relay` 只输出 `agent_talk` 参数，**不会自己调用 MCP 或发送通知**。DSH 须实际执行现有 MaiBot MCP 的传话工具。
 
 DSH 官方接口不能提供可信原聊天目标时，0.2.1 支持**受控确认**：DSH 将严格清单写到 `outbox/.dsh-handoffs/<task_id>.json`，给出准确的请求字节 SHA-256；用户回到原聊天明确调用 `dsh_import_request(task_id, request_sha256)`。该真实 Host 工具调用复用现有交接内核与文件 scope，返回实际 `file_ref`。它不自动路由、不后台上传、不调用 QQ 发送；哈希只确认请求内容，不是聊天授权。
+
+“用户在原聊天明确确认”是操作及模型策略要求。SDK 2.19.0 没有可供本插件验证的人类批准事件，代码**不能证明已经得到人类批准**；也不解析聊天历史或清单文字伪造批准。可由代码验证的文件授权仍只有本次 Host 签发的真实 scope，原聊天选择和人类意图须由操作者核对。
+
+## 两端版本要匹配
+
+DSH 插件包版本与 DSH CLI 版本是两回事。当前 DSH 插件 main 为 **0.2.1**，固定提交 [`f008cdc039122d360dee67b86e1e2004083ba019`](https://github.com/MemoryController/dsh-maibot-artifacts/tree/f008cdc039122d360dee67b86e1e2004083ba019)，声明 Linux、Node ≥24、DSH runtime **0.2.2-alpha.2**。历史插件包 0.2.0 对应 `0958d8ac…`，不是“DSH CLI 0.2.0 兼容”声明。核查时 DSH 仓库没有 tags，不能把包版本当作 Release。
+
+| DSH 插件 | 本插件 | 可用确认方式 |
+| --- | --- | --- |
+| 当前 0.2.1，默认 manifest 模式 | main 0.2.0 或本 PR 0.2.1 | 返回完整 dsh_import_handoff 参数，用户在原聊天明确确认 |
+| 当前 0.2.1，显式 request 模式 | 本 PR 0.2.1 | dsh_import_request(task_id, request_sha256) |
+| 当前 0.2.1，request 模式 | main 0.2.0 | 不支持：旧版没有请求工具，改用 manifest 模式 |
+| 历史 DSH 插件 0.2.0 | 本 PR 0.2.1 | 默认 request 协议可读；旧提交状态缺陷已由 DSH 0.2.1 修复，不推荐回滚处理未知任务 |
+
+固定两端提交、完整矩阵和协议依据见[兼容说明](docs/compatibility.md)。DSH 的本地状态不读取 MaiBot 文件库，也不会把自写 receipt JSON 升级为官方入库确认。
 
 ## 安装与配置
 
@@ -60,7 +76,7 @@ DSH 官方接口不能提供可信原聊天目标时，0.2.1 支持**受控确�
 
 ### `dsh_import_request(task_id, request_sha256)`：受控确认
 
-DSH 插件准备文件后会返回这两个实值。由用户在任务的原聊天明确要求执行：
+DSH 0.2.1 显式配置 `confirmationMode: request` 时，会在 publish 结果的 `confirmation.arguments` 中返回这两个实值；默认 manifest 模式返回的是完整清单导入参数。不要把默认模式误认成已经调用本工具。由用户在任务的原聊天明确要求执行：
 
 ```json
 {"task_id":"0123456789abcdef0123456789abcdef","request_sha256":"<DSH 返回的 64 位小写十六进制请求哈希>"}
@@ -70,7 +86,7 @@ DSH 插件准备文件后会返回这两个实值。由用户在任务的原聊�
 
 两种导入入口共享同一持久账本；重复任务只核对已授权结果，不重复上传。此工具没有 `send`、`target`、`chat_id` 或 `session_id` 参数。请求文件、内容哈希和 task_id 都不能证明聊天身份；**调用发生在哪个真实聊天，就只可能向该聊天入库，因此必须由原聊天用户确认**。不要把本工具包装成自动识别原聊天的流程。
 
-只有实际工具结果中的逐项 `file_ref` 才证明入库；DSH 的 prepared、确认指引或共享目录中的自称回执都不是入库证据。回执丢失时在原聊天调用 `dsh_handoff_status(task_id)`，核对原调用记录与 `files_list`。`unknown/unconfirmed` 不自动重试、不换 ID 重新上传。
+只有真实 Host 工具调用返回的逐项 `file_ref` 才是官方上传入库证据；测试 double 生成的 file_ref 不代表生产文件。DSH 的 prepared/submitted/queued、确认指引或共享目录中的自称回执都不是入库证据。回执丢失时在原聊天调用 `dsh_handoff_status(task_id)`，核对原调用记录与 `files_list`。`unknown/unconfirmed` 不自动重试、不换 ID 重新上传。
 
 ### `dsh_import(paths, send=false)`：直接导入
 
@@ -164,7 +180,9 @@ python3 -m venv .venv
 .venv/bin/python -m ruff check .
 ```
 
-本机 Python 3.12 正式全套 **286 项通过，无失败、无跳过**：原安全/插件回归 103（57+46）、纯插件 handoff 83、DSH helper 48、请求文件确认 41、新插件/安装接线 11；Ruff 全仓通过。原版 v1.3.18 官方 ManifestValidator 校验 0.2.1 清单通过，无 errors/warnings。实际安装测试在没有 Host 源码的临时 plugins 目录复制五个插件运行文件，使用真实 SDK import/create_plugin/on_load 成功。请求确认集成测试执行实际 `request.py`、`Handoff`、SQLite 账本和安全快照；文件 API 使用聊天 scope double，不代表真实 MaiBot HTTP/DSH/QQ 集成。完整依据见[兼容说明](docs/compatibility.md)。Python 3.10 仅配置 CI，本机未运行，远端结果以 CI 记录为准。
+本次在 Python 3.12 实际执行正式套件 **303 项通过，无失败、无跳过**；Ruff 与 diff 检查通过。另对固定 DSH 插件 0.2.0/0.2.1 的真实 dist 分别运行跨语言协议检查，各 **6 项通过，共 12 项**，独立于正式 303 项。原版 MaiBot v1.3.18 ManifestValidator 复验 0.2.1 清单无 errors/warnings。初审的 286 仅是历史基线，不是当前总数。
+
+协议检查执行实际 DSH ArtifactService/文件系统与 Python request/Handoff/SQLite；Files API 仍是聊天 scope double，不签发真实 Host scope，也不产生生产附件。固定版本、复现命令和边界见[兼容说明](docs/compatibility.md)及[审阅记录](docs/pr-2-review.md)。CI 已配置 Node 24/Python 3.12 的双 DSH 提交矩阵；远端执行结论以对应提交记录为准，不由配置推断。
 
 `integrations/` 中保留的 Host 补丁是历史实验，**不支持部署，不属于正式安装步骤**；默认 pytest/CI 不运行实验测试。本轮未运行旧 Host 实验，也未修改官方源码。不要使用生产源码或数据作测试目标。
 
