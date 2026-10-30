@@ -1,0 +1,2 @@
+# Unified diff context lines use a required leading space, including blank lines.
+integrations/maibot_1_3_18/host.patch whitespace=-blank-at-eol,-blank-at-eof
