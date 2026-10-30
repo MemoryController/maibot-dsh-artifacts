@@ -1,6 +1,6 @@
 # 官方接口调查与验证边界
 
-本 PR 审核版本 0.2.1 使用原版 MaiBot 插件能力，不应用 Host 补丁。协议基准为 main [`ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8`](https://github.com/MemoryController/maibot-dsh-artifacts/tree/ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8)（0.2.0），本 PR 初审基线为 [`27d6c00784557128ebb9c57edf04a0a5c1382bd6`](https://github.com/MemoryController/maibot-dsh-artifacts/tree/27d6c00784557128ebb9c57edf04a0a5c1382bd6)；后续修正的验证记录以本 PR 最终提交为准。0.2.1 增加请求文件确认入口，manifest v1 和既有账本格式不变。固定官方源码依据：
+当前 0.2.1 使用原版 MaiBot 插件能力，不应用 Host 补丁。本轮基于已合并 PR #2 的 main [`8018552bc82ee5fada38f6792a1721410adf5bc8`](https://github.com/MemoryController/maibot-dsh-artifacts/tree/8018552bc82ee5fada38f6792a1721410adf5bc8)。历史 0.2.0 基准为 [`ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8`](https://github.com/MemoryController/maibot-dsh-artifacts/tree/ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8)。0.2.1 的请求确认入口已在当前 main；本轮只优化可选接力，不改变 manifest v1、账本或文件权限。固定官方源码依据：
 
 | 项目 | 提交 |
 | --- | --- |
@@ -20,14 +20,14 @@ manifest v2 仅声明已核对 Host/SDK 版本及实际需要的 files.list/uplo
 
 | 固定 DSH 插件与模式 | 固定 MaiBot 插件 | 协议结论 |
 | --- | --- | --- |
-| 0.2.1 main f008cdc…，默认 manifest | main 0.2.0 ba8a5fb… | 兼容已有 dsh_import_handoff，完整参数由原聊天明确确认 |
-| 0.2.1 main f008cdc…，默认 manifest | 本 PR 0.2.1 | 相同已有入口，兼容；无需请求工具 |
-| 0.2.1 main f008cdc…，显式 request | 本 PR 0.2.1 | 固定请求路径/字节 SHA/清单兼容 |
-| 0.2.1 main f008cdc…，request | main 0.2.0 ba8a5fb… | 不支持，该工具不存在；使用默认 manifest |
-| 历史 0.2.0 0958d8ac…，默认 request | 本 PR 0.2.1 | 请求协议兼容，但旧 DSH 发布后记录失败的状态缺陷不因对端升级而修复，不推荐回滚使用 |
-| 历史 0.2.0 0958d8ac…，默认 request | main 0.2.0 ba8a5fb… | 默认交互不兼容；只能人工把完整 manifest 交给已有 dsh_import_handoff |
+| 0.2.1 main f008cdc…，默认 manifest | 当前 main 0.2.1 8018552… | dsh_import_handoff，完整参数由原聊天确认或按已有任务授权接力 |
+| 0.2.1 main f008cdc…，显式 request | 当前 main 0.2.1 8018552… | 固定请求路径/字节 SHA/清单兼容 |
+| 0.2.1 main f008cdc…，默认 manifest | 历史 0.2.0 ba8a5fb… | 兼容已有 dsh_import_handoff，无请求工具 |
+| 0.2.1 main f008cdc…，request | 历史 0.2.0 ba8a5fb… | 不支持，该工具不存在；使用默认 manifest |
+| 历史 0.2.0 0958d8ac…，默认 request | 当前 main 0.2.1 | 请求协议兼容，但旧 DSH 发布后记录失败的状态缺陷不因对端升级而修复，不推荐回滚使用 |
+| 历史 0.2.0 0958d8ac…，默认 request | 历史 0.2.0 ba8a5fb… | 默认交互不兼容；只能人工把完整 manifest 交给已有 dsh_import_handoff |
 
-本 PR 对应[PR #2](https://github.com/MemoryController/maibot-dsh-artifacts/pull/2)，没有把审核源码冒充已合并 main/正式发布。固定完整提交如上；状态变更、合并和 Release 是不同操作。新增审阅及分层验证说明见 [PR #2 审阅记录](pr-2-review.md)。
+[PR #2](https://github.com/MemoryController/maibot-dsh-artifacts/pull/2) 已合并为上述 main；其[审阅记录](pr-2-review.md)保留当时事实。本轮[自动化调查](automation-research.md)与[可选流程](automation.md)以当前 main 为基准，未创建 Release。
 
 ### 精确字节协议与状态
 
@@ -37,7 +37,7 @@ manifest 的路径是 outbox 相对路径、size 为非负整数、哈希为 64 
 
 DSH 本地 `state` 仅 prepared/queued/unknown，成功发布另用 `result="submitted"`，不要等待不存在的 state=submitted。默认流程的 submitted 不代表通知原聊天，`maibot_registration` 仍为 unconfirmed；可选可信通知流程 queued 也只证明入队。本地 status 不查 MaiBot 文件库、不根据共享 receipt JSON 升级为 imported。原聊天实际调用工具、官方上传返回每项真实 file_ref，并用同聊天 files_list 核验，才是入库证据。测试 double 的引用仅是测试数据。
 
-用户必须在原聊天明确确认；task_id、请求 SHA 和清单仅确认内容，不提供原聊天授权。默认 manifest 模式与显式 request 模式均不能绕过真实 scope、自动选择原聊天、自动发送，unknown 不能自动重试。
+用户必须明确授权导入该原任务产物；可在原聊天发起时给出，不必等待产物后再次复制参数。task_id、请求 SHA 和清单仅确认内容，不提供原聊天授权。默认 manifest 模式与显式 request 模式均不能绕过真实 scope、自动选择原聊天、自动发送，unknown 不能自动重试。
 
 这里的“人类明确确认”是操作/模型策略边界，**不是插件代码已证明批准的安全保证**。SDK 2.19.0 没有本插件可验证的 human-approval 事件；工具描述要求确认不等于收到可核验批准。代码不解析历史消息、Agent 文本或 manifest 中的“已批准”来构造授权，只使用真实 Host scope 限定文件操作。人类意图和正确原聊天须在部署流程中核对。
 
@@ -101,18 +101,20 @@ SnowLuma 文件须结构化登记。Host [`integration.py:378`](https://github.c
 
 文件能力默认关闭、HTTP 通道独立于 WebUI及 unknown 语义见官方 [docs/file-service.md](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/docs/file-service.md)。SDK download 没有客户端 max_bytes 参数，插件导出限额在下载完成后检查；Host 配额和暂存空间仍必要。
 
-本次 Python 3.12 正式套件实际运行 **303 passed，无失败、无跳过**，Ruff 和 diff 检查通过。初审 286 是历史基线；当前分层如下：
+本轮 Python 3.12 默认套件实际运行 **331 passed，无失败、无跳过**，Ruff 和 diff 检查通过。此前 PR #2 的 303 是历史基线；当前默认套件分层如下：
 
 | 范围 | 数量 | 验证方式 |
 | --- | ---: | --- |
 | 原文件安全及插件回归 | 103 | 安全模块 57 + 原插件 46，临时文件系统与 SDK mock |
 | 纯插件交接账本 | 83 | 严格清单、快照哈希、claim/未知状态、缓存权限、只读重放、独立哨兵等 |
-| DSH helper | 48 | 标准库 CLI、清单准备/relay 参数、实际子进程调用，包含不加载 site 的运行检查 |
+| DSH helper | 76 | 标准库 CLI、清单准备/relay/relay-request、严格请求与准确原字节 SHA、失败无输出，包含不加载 site 的实际子进程检查 |
 | 请求文件确认及新插件/安装接线 | 69 | 实际 request/Handoff/SQLite/安全快照、严格 JSON/哈希/链接/篡改、取消清理、只读重放、部分成功、阶段字段及无 Host 补丁安装 |
 
-原版 MaiBot v1.3.18 官方 ManifestValidator 对 0.2.1 manifest 实际校验通过，无 errors/warnings。安装测试实际把五个插件运行文件复制到**不存在任何 Host 源码**的临时 plugins 目录，以真实 SDK 完成 import/create_plugin/on_load，证明普通安装不依赖 Host 改动。所有 ctx.files API 测试使用 mock，不是实际 Host 文件服务、DSH 或 QQ 集成。
+原版 MaiBot v1.3.18 官方 ManifestValidator 对未改变的 0.2.1 manifest 实际校验通过，无 errors/warnings。安装测试实际把五个插件运行文件复制到**不存在任何 Host 源码**的临时 plugins 目录，以真实 SDK 完成 import/create_plugin/on_load，证明普通安装不依赖 Host 改动。默认套件的 ctx.files API 使用 mock，不是实际 Host 文件服务、DSH 或 QQ 集成。
 
-独立跨语言测试 [protocol_checks/dsh_protocol.py](../protocol_checks/dsh_protocol.py) 对真实 DSH dist 执行 ArtifactService 与文件系统操作，再将准确原字节交给真实 Python request/Handoff/SQLite；仅 Files API 是 scope double。固定 DSH 0.2.0 `0958d8ac…`、0.2.1 `f008cdc…` 各 **6 passed，共 12**，不混入正式 303。覆盖中文/emoji、空文件/二进制共四个文件、原字节 SHA、默认确认模式、重复/重启、跨聊天拒绝、丢失回执不重传、submitted 未入库及字节篡改。这不是启动真实 DSH/ACP 会话。
+独立跨语言测试 [protocol_checks/dsh_protocol.py](../protocol_checks/dsh_protocol.py) 对真实 DSH dist 执行 ArtifactService 与文件系统操作，再将准确原字节交给真实 Python request/Handoff/SQLite；Files API 是 scope double。固定 DSH 0.2.0 `0958d8ac…`、0.2.1 `f008cdc…` 各 **12 passed，共 24**，不混入默认 331。覆盖中文/emoji、有效 PNG/空文件/二进制、原字节 SHA、默认模式、真实 CLI 参数接力、零自动通知/未调用不入库、重复/重启、跨聊天拒绝、丢失回执不重传和字节篡改。这不是启动真实 DSH/ACP 会话。
+
+另有[隔离官方 Host 文件组件检查](../host_checks/README.md) **8 passed**：实际运行固定 DSH 0.2.1 dist、官方 SDK、回环 HTTP、原版 FileService/FileStore/capability/provider 和临时 SQLite。测试夹具代替 dispatcher 签发/撤销真实 file ticket，临时聊天注册表和 QQ transport 为 doubles；验证官方临时引用与 files_list、SDK 下载后 Pillow 图片处理、scope 拒绝、重复/重建、HTTP 回执丢失/取消及 unknown 不补发。它不证明真实聊天派发、目标图片插件、Agent 路由或 QQ 投递。产品代码未增加 HTTP 服务。
 
 复现独立协议检查时，需要 Node ≥24，使用不含本地改动的固定源码目录；脚本只读其 dist，不自行抓代码或重建包。例如在本仓库已有虚拟环境中：
 
@@ -126,6 +128,6 @@ DSH_ARTIFACTS_COMMIT=f008cdc039122d360dee67b86e1e2004083ba019 \
 .venv/bin/python -m pytest -q protocol_checks/dsh_protocol.py
 ```
 
-目录 HEAD 必须恰好是对应完整 SHA，package/src/dist 的改动会使检查失败。CI 独立 Node 24/Python 3.12 job 固定相同双提交，正式 Python job 配置 3.10/3.12；远端结论以当前提交实际记录为准。本轮未跑旧 Host 实验，未修改官方源码，也未执行生产 Host/SSH/QQ。验证分层见 [PR #2 审阅记录](pr-2-review.md)。
+目录 HEAD 必须恰好是对应完整 SHA，package/src/dist 的改动会使检查失败。CI 独立 Node 24/Python 3.12 job 固定相同双提交及官方组件源，默认 Python job 配置 3.10/3.12；远端结论以当前提交实际记录为准。本轮未跑旧 Host 实验，未修改官方源码，也未执行生产 Host/SSH/QQ。历史验证分层见 [PR #2 审阅记录](pr-2-review.md)，当前自动化边界见[源码调查](automation-research.md)。
 
 **尚未完成真实 Docker + SSH ACP + DSH + SnowLuma QQ 全链路验收。** 仍需确认镜像/Runner 加载、挂载和 UID/GID、模型选工具、真正 MCP 传话、QQ 入站登记、网络文件通道及平台投递。官方[文件服务说明 38 行](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/docs/file-service.md#L38)也保留实机验收要求。部署见 [Docker](docker.md)，可复制 DSH 指引见 [DSH_INSTRUCTIONS](DSH_INSTRUCTIONS.md)。

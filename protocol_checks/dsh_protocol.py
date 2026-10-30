@@ -8,7 +8,10 @@ only file-service boundary is a scope-checking test double.
 import hashlib
 import json
 import os
+import struct
 import subprocess
+import sys
+import zlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,22 +25,36 @@ SUPPORTED = {
     "f008cdc039122d360dee67b86e1e2004083ba019": "0.2.1",
 }
 NODE_PRODUCER = r"""
-import { pathToFileURL } from 'node:url';
-import { join } from 'node:path';
 import { ArtifactService } from './dist/core.js';
 const [root, state, pathsJSON] = process.argv.slice(1);
 const owner = 'isolated-protocol-test';
+let dispatchCalls = 0;
+const dispatch = async () => { dispatchCalls++; throw new Error('No verified origin was supplied'); };
 const config = { workspaceRoot: root, stateDir: state, confirmationMode: 'request' };
 const service = new ArtifactService(config);
 const prepared = await service.prepare(JSON.parse(pathsJSON), owner);
-const submission = await service.publish(prepared.manifest.task_id, owner);
+const submission = await service.publish(prepared.manifest.task_id, owner, undefined, dispatch);
 const restarted = new ArtifactService(config);
 const local = await restarted.localStatus(prepared.manifest.task_id, owner);
 const defaults = new ArtifactService({ workspaceRoot: root, stateDir: state + '-default' });
 const defaultPrepared = await defaults.prepare(JSON.parse(pathsJSON), owner);
-const defaultSubmission = await defaults.publish(defaultPrepared.manifest.task_id, owner);
-console.log(JSON.stringify({ manifest: prepared.manifest, submission, local, defaultSubmission }));
+const defaultSubmission = await defaults.publish(defaultPrepared.manifest.task_id, owner, undefined, dispatch);
+console.log(JSON.stringify({ manifest: prepared.manifest, submission, local, defaultSubmission, dispatchCalls }));
 """
+
+
+def png_fixture():
+    """A valid 1x1 RGBA image; availability alone does not prove a vision tool ran."""
+    def chunk(kind, content):
+        body = kind + content
+        return struct.pack("!I", len(content)) + body + struct.pack("!I", zlib.crc32(body))
+
+    return (
+        bytes.fromhex("89504e470d0a1a0a")
+        + chunk(b"IHDR", struct.pack("!2I5B", 1, 1, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(bytes([0, 255, 0, 0, 255])))
+        + chunk(b"IEND", b"")
+    )
 
 
 class ScopedFiles:
@@ -100,7 +117,7 @@ def cross(producer_source, tmp_path):
     (shared / "outbox").mkdir(parents=True)
     runtime.mkdir(mode=0o700)
     names = ["中文 报告.txt", "图片🧪.png", "empty.bin", "binary.bin"]
-    contents = ["中文\r\n与空格\n".encode(), bytes.fromhex("89504e470d0a1a0a"), b"", bytes(range(256))]
+    contents = ["中文\r\n与空格\n".encode(), png_fixture(), b"", bytes(range(256))]
     paths = [f"outbox/{name}" for name in names]
     for path, content in zip(paths, contents, strict=True):
         (shared / path).write_bytes(content)
@@ -172,6 +189,123 @@ async def test_duplicate_restart_and_scope_isolation(cross):
     assert rejected["registered"] == "unconfirmed"
     assert not any(ref in repr(rejected) for ref in refs)
     assert len(s.files.uploads) == 4 and not s.files.sends
+
+
+def relay_request(s, submission_key="submission"):
+    """Run the actual helper. This creates data, and performs no MCP/Host call."""
+    submission = s.produced[submission_key]
+    task_id = submission["manifest"]["task_id"]
+    root = Path(__file__).resolve().parents[1]
+    process = subprocess.run(
+        [
+            sys.executable,
+            str(root / "tools" / "dsh_handoff.py"),
+            "relay-request",
+            "--root",
+            str(s.shared),
+            "--task-id",
+            task_id,
+            "--request-sha256",
+            submission["shared_request"]["sha256"],
+            "--target",
+            "operator-verified-original-chat",
+        ],
+        cwd=root,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    return process
+
+
+def test_actual_dsh_has_no_automatic_notification_without_trusted_origin(cross):
+    s = cross
+    assert s.produced["dispatchCalls"] == 0
+    for key in ("submission", "defaultSubmission"):
+        submission = s.produced[key]
+        assert submission["result"] == "submitted"
+        assert submission["maibot_registration"] == "unconfirmed"
+        assert submission.get("notification") is None
+        assert submission.get("originHash") is None
+    assert not s.files.uploads and not s.files.sends and not s.data.exists()
+
+
+@pytest.mark.parametrize("submission_key", ["submission", "defaultSubmission"])
+async def test_relay_request_data_to_scoped_double_requires_an_actual_tool_call(cross, submission_key):
+    s = cross
+    process = relay_request(s, submission_key)
+    assert process.returncode == 0, process.stderr
+    assert "prepared_only" in process.stderr
+    relay = json.loads(process.stdout)
+    assert set(relay) == {"target", "text"}
+    assert relay["target"] == "operator-verified-original-chat"
+    instruction = json.loads(relay["text"].splitlines()[-1])
+    submission = s.produced[submission_key]
+    assert instruction == {
+        "tool": "dsh_import_request",
+        "arguments": {
+            "task_id": submission["manifest"]["task_id"],
+            "request_sha256": submission["shared_request"]["sha256"],
+        },
+    }
+    assert not s.files.uploads and not s.files.sends and not s.data.exists()
+    # Pretending the text was queued is still no tool execution or registration.
+    assert (await s.broker.status(instruction["arguments"]["task_id"]))["registered"] == "unconfirmed"
+    assert not s.data.exists()
+
+    # Explicit test dispatch through a scoped double, not a real Host or Planner.
+    result = await import_request(s.broker, **instruction["arguments"])
+    assert result["registered"] == "confirmed" and result["delivery"] == "not_requested"
+    refs = {item["file"]["file_ref"] for item in result["items"]}
+    assert refs == {item["file_ref"] for item in await s.files.list()}
+    assert [content for _, content, _ in s.files.uploads] == s.contents
+    assert (await import_request(s.broker, **instruction["arguments"]))["cached"] is True
+    assert len(s.files.uploads) == 4 and not s.files.sends
+
+    s.files.scope = "another-chat"
+    assert not await s.files.list()
+    rejected = await import_request(s.broker, **instruction["arguments"])
+    assert rejected["registered"] == "unconfirmed"
+    assert not any(ref in repr(rejected) for ref in refs)
+    assert len(s.files.uploads) == 4 and not s.files.sends
+
+
+async def test_relay_request_lost_receipt_never_repeats_upload(cross):
+    s = cross
+    process = relay_request(s)
+    assert process.returncode == 0, process.stderr
+    instruction = json.loads(json.loads(process.stdout)["text"].splitlines()[-1])
+    s.files.uncertain = True
+    result = await import_request(s.broker, **instruction["arguments"])
+    assert result["registered"] == "unknown"
+    count = len(s.files.uploads)
+    assert count > 0
+    s.files.uncertain = False
+    s.broker = Handoff(s.files, str(s.shared), s.runtime, s.data, 50 * 1024**2, 8)
+    await import_request(s.broker, **instruction["arguments"])
+    await s.broker.status(instruction["arguments"]["task_id"])
+    assert len(s.files.uploads) == count and not s.files.sends
+
+
+async def test_relay_target_and_task_cannot_create_a_host_scope(cross):
+    s = cross
+    process = relay_request(s)
+    assert process.returncode == 0, process.stderr
+    instruction = json.loads(json.loads(process.stdout)["text"].splitlines()[-1])
+    s.files.scope = None
+    result = await import_request(s.broker, **instruction["arguments"])
+    assert result["registered"] == "unconfirmed"
+    assert not s.files.uploads and not s.files.sends and not s.data.exists()
+
+
+def test_relay_request_rejects_changed_actual_dsh_bytes(cross):
+    s = cross
+    request = s.shared / s.produced["submission"]["shared_request"]["path"]
+    request.write_bytes(request.read_bytes() + b"\n")
+    process = relay_request(s)
+    assert process.returncode != 0 and not process.stdout
+    assert "request_hash_mismatch" in process.stderr
+    assert not s.files.uploads and not s.files.sends and not s.data.exists()
 
 
 async def test_lost_registration_receipt_is_not_retried(cross):
