@@ -4,6 +4,10 @@
 
 部署基线：MaiBot 在 Linux Docker 容器中，DSH 以宿主机普通用户运行，已有 SSH ACP 连接及工具回连。插件不配置 SSH、不启动 DSH、不增加网络服务。SDK 须是实际 Runner 环境中的 v2.19.0；不同镜像的依赖安装方式以该镜像现有管理方式为准，不要只在宿主机 pip 安装后假设容器里可用。
 
+若使用 DSH Cordis 配套插件，固定当前 main **0.2.1** 的 `f008cdc039122d360dee67b86e1e2004083ba019`，它要求 Linux、Node ≥24、DSH runtime **0.2.2-alpha.2**；包版本不是运行时版本。先在现有宿主环境核对 `node --version`、`dsh --version`，保留当前 runtime/DSH_HOME/profile，不擅自重装或重置。核查时配套仓库无 tags，不把 main/package 号当 Release。旧 DSH 插件 0.2.0 的 `0958d8ac…` 有已修复的发布状态缺陷，不建议回滚处理未知任务。
+
+配套 0.2.1 默认 manifest 确认模式兼容 MaiBot 插件 main 0.2.0 / 本 PR 0.2.1；显式 request 模式必须有本 PR 新工具及 `request.py`。完整固定组合见[兼容说明](compatibility.md)。安装/更新配套插件后，按现有维护流程核查在途任务再重新连接 ACP 进程；安装新文件不代表旧进程已经加载。
+
 ## 挂载
 
 在现有 Compose 服务里添加/保留相应卷。下面是**片段**，不是完整部署；保留现有镜像、连接参数、data 及配置挂载，不重复定义同一容器目标：
@@ -19,6 +23,12 @@ services:
 ```
 
 将本仓库完整放入实际实例 `plugins/maibot-dsh-artifacts/`，不要只复制 plugin.py。若 Runner 在另一容器/进程环境，插件与工作区也必须在其实际文件系统可见。确认插件 SDK 版本、入口加载状态与能力授权。
+
+本 PR 0.2.1 的请求确认入口需要根目录 `request.py`。DSH 在共享 `outbox/.dsh-handoffs/` 保存严格清单请求；MaiBot 按用户明确选择只读对应请求，安全复制到自己的私有 runtime 目录核对原字节 SHA。配套默认 manifest 模式仍需用户在原聊天明确确认完整清单；只有显式 request 模式才调用 `dsh_import_request(task_id, request_sha256)`。两种模式都不新增服务、管理员 Token 或核心改动。
+
+DSH 正常创建 `.dsh-handoffs` 为 0750，请求文件为 0640，归 DSH 用户并继承共享组；确保不同 UID 的实际 Runner 可读及可遍历。不要把该目录改为软链接或 chmod 777，不把 DSH 私有状态目录和 MaiBot 私有账本混进工作区。
+
+原聊天人类确认是操作/模型策略要求。SDK 2.19.0 没有插件可验证的批准事件，部署说明不能当作代码已证明人类同意；本插件只验证 Host 文件 scope，不从历史消息或 Agent 的“已批准”文字造授权。请求哈希只固定内容，不能代替正确聊天与人类意图核对。
 
 宿主机目录：
 
@@ -54,9 +64,9 @@ QQ 客户端在另一主机时，按官方文件服务说明设置 `files.transf
 1. 查看插件加载成功、SDK 版本和文件功能开启，检查实际 Runner 内能看到共享目录且有权限。
 2. QQ 发送小文件，原聊天 files_list 应登记引用；未登记先查 SnowLuma 结构化附件、群上传通知设置与聊天过滤。
 3. 当前聊天 dsh_export 到 inbox，宿主机 DSH 读取并核对哈希；目标已存在时必须拒绝。
-4. DSH 按 [DSH_INSTRUCTIONS](DSH_INSTRUCTIONS.md) 准备中文名二进制产物与清单，真正调用 agent_talk，检查原聊天确实调用 dsh_import_handoff，并获得 file_ref。
+4. 按 [DSH_INSTRUCTIONS](DSH_INSTRUCTIONS.md) 准备中文名二进制和实际清单。CLI 路线须真正调用 agent_talk；Cordis 默认共享提交路线由用户取得实际 confirmation 参数并回原聊天明确确认。检查真实 dsh_import_handoff / dsh_import_request 调用和官方 file_ref，submitted/queued 均不足以证明入库。
 5. 只在明确需要时发送，核对 QQ 文件和回执；unknown 不自动重发。另一个聊天不能靠引用或伪造 session_id 取得缓存/附件权限。
 
-仅有 PID、挂载目录或 agent_talk 排队回执不足以确认文件桥接成功。本仓库**尚未完成真实 Docker + DSH + QQ 全链路验收**，上述步骤须由目标部署执行。
+本次本机正式 303 项及两版 DSH dist 独立协议检查共 12 项通过；这些使用真实本地文件/账本和 scope double，不是生产 Host scope 或 QQ。仅有 PID、挂载目录或 agent_talk 排队回执不足以确认桥接成功。本仓库**尚未完成真实 Docker + SSH ACP + DSH + QQ 全链路验收**，上述步骤须由目标部署执行。
 
 更新插件时使用固定已审核提交并保留私有数据；不使用历史 Host 补丁。停用/卸载插件前处理在途操作，保留账本及原聊天附件以便核查，避免卸载后重新安装便盲目重放。

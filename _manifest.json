@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "id": "github.MemoryController.maibot-dsh-artifacts",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "name": "DSH 文件桥接",
   "description": "在真实聊天工具作用域内桥接 DSH 共享工作区与 MaiBot 聊天文件库",
   "author": {

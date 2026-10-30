@@ -299,7 +299,7 @@ async def test_real_sdk_tool_metadata_and_schema(plugin_module):
     plugin = plugin_module.create_plugin()
     components = plugin.get_components()
     tools = {item["name"]: item for item in components}
-    assert set(tools) == {"dsh_import", "dsh_export", "dsh_import_handoff", "dsh_handoff_status"}
+    assert set(tools) == {"dsh_import", "dsh_export", "dsh_import_handoff", "dsh_handoff_status", "dsh_import_request"}
     for name in tools:
         info = getattr(plugin, name).__maibot_component_info__
         assert info.metadata["visibility"] == "visible"
