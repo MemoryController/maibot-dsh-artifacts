@@ -1,5 +1,5 @@
 # Component test dependencies; not extra plugin runtime requirements.
--r requirements-dev.txt
+-r ../../requirements-dev.txt
 sqlmodel==0.0.48
 SQLAlchemy==2.1.6
 aiohttp==3.14.5

@@ -1,6 +1,10 @@
-# MaiBot v1.3.18 专用 ACP 文件交接扩展
+> **历史实验存档：不支持部署。** 正式 0.2.0 方案使用原版 MaiBot，仅安装插件，不应用此目录的 Host 补丁，不执行安装器，不重建修改源码的镜像。请阅读[正式 README](../../README.md)、[Docker 部署](../../docs/docker.md)和[DSH 指引](../../docs/DSH_INSTRUCTIONS.md)。
+>
+> 下文仅保留早期实验设计、旧测试结果与维护记录，不能视为当前支持承诺或操作建议。默认 pytest/CI 不运行此目录实验测试，旧测试数不计入正式版本验收。源码/补丁保留历史与许可依据，原 [NOTICE](NOTICE.md) 和 [COPYING.MaiBot](COPYING.MaiBot) 继续有效。
 
-这是本仓库提供的**可选 Host 源码扩展**，默认关闭，必须由部署者检查、备份并显式应用。普通 `dsh_import` / `dsh_export` 插件仍为 0.1.0，接口不变；扩展不属于 SDK 升级，也不是 MaiBot 官方已合并功能。
+# 历史实验：MaiBot v1.3.18 专用 ACP 文件交接扩展
+
+此目录曾记录过一个默认关闭的 Host 源码扩展实验，早期围绕 0.1.0 插件设计。该路线现已停止作为部署方案支持；下文的配置、安装命令和测试数均为历史记录，**不是当前操作建议，请勿按其应用补丁**。正式 0.2.0 使用原版 Host 的插件工具，不需要此扩展。
 
 插件与新写集成模块使用根目录 MIT 许可；`host.patch` 中 MaiBot 上游上下文及修改保留 GPL-3.0。见[NOTICE](NOTICE.md)及[COPYING.MaiBot](COPYING.MaiBot)。分发修改后的 MaiBot 时仍须遵守其上游许可，不能把本仓库 MIT 当成对 MaiBot 的重新许可。
 

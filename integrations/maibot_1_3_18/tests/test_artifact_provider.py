@@ -35,7 +35,7 @@ def adapter(monkeypatch):
         monkeypatch.setitem(sys.modules, name, module)
     monkeypatch.setitem(sys.modules, "src.core.tooling", tooling)
     name = "integrations.maibot_1_3_18._provider_under_test"
-    path = Path(__file__).resolve().parents[1] / "integrations/maibot_1_3_18/artifact_provider.py"
+    path = Path(__file__).resolve().parents[3] / "integrations/maibot_1_3_18/artifact_provider.py"
     spec = importlib.util.spec_from_file_location(name, path)
     module = importlib.util.module_from_spec(spec)
     monkeypatch.setitem(sys.modules, name, module)
