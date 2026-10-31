@@ -10,7 +10,9 @@ from typing import Any
 from maibot_sdk import Field, MaiBotPlugin, PluginConfigBase, Tool
 from maibot_sdk.types import ToolParameterInfo, ToolParamType
 
-from .handoff import Handoff
+from .handoff import Handoff, _io
+from .image_open import open_image
+from .image_safety import detect_upload_mime
 from .request import import_request
 from .safe_files import SafetyError, Workspace
 
@@ -249,7 +251,8 @@ class DSHArtifactsPlugin(MaiBotPlugin):
                     snapshot = Path(stage) / "payload"
                     with Workspace(self.config.workspace.root) as workspace:
                         local = workspace.snapshot(relative, snapshot, self.config.workspace.max_file_bytes)
-                    remote = await self.ctx.files.upload(snapshot, name=local["name"])
+                    mime_type = await _io(detect_upload_mime, snapshot)
+                    remote = await self.ctx.files.upload(snapshot, name=local["name"], mime_type=mime_type)
                     item.update(status="imported", file={**local, **_metadata(remote)})
                     if send:
                         try:
@@ -273,6 +276,30 @@ class DSHArtifactsPlugin(MaiBotPlugin):
             "items": items,
             "notice": "逐项检查结果；unknown 不自动重发，部分成功不整批重试。",
         }
+
+    @Tool(
+        "dsh_open_image",
+        brief_description="把当前聊天已登记的 PNG/JPEG/WebP 附件按需打开为真实图片上下文，不重复上传。",
+        detailed_description=(
+            "file_ref 必须来自当前聊天 files_list 或成功导入结果，附件须已缓存且 ready。"
+            "官方 download 校验聊天权限及真实字节；"
+            "按内容解码验证静态 PNG/JPEG/WebP，忽略文件名和历史 MIME，支持旧 octet-stream 图片。"
+            "一次加载一张，最多 8 MiB、1600 万像素、单边 8192；不改变原附件，不发送 QQ 文件。"
+            "结果通过 content_items 提供 image；Host 自动生成 tool_result:<call_id>:1 媒体索引。"
+            "后续图片编辑工具须接受该 media_index 并通过官方图片上下文解析接口读取，"
+            "不得把 file_ref、路径或普通文字当图片消息 ID，也不要自行编造工具调用 ID。"
+            "已核对 maimai-drawpic-plugin 2.1.3 不支持此媒体索引，不能填入它的 source_message_id，"
+            "否则可能回退到另一张聊天图片；应等待该插件提供明确的媒体索引适配。"
+            "不接受聊天 ID、目标、URL 或本地路径；仅当前真实 Host 工具作用域可用。"
+        ),
+        parameters=[ToolParameterInfo(name="file_ref", description="当前聊天的 32 位小写十六进制附件引用")],
+        visibility="visible",
+        timeout_ms=240000,
+    )
+    async def dsh_open_image(self, file_ref: str, **kwargs: Any) -> dict[str, Any]:
+        if not self.config.plugin.enabled:
+            return {"success": False, "content": "图片工具已停用。", "content_items": [], "error": {"code": "disabled"}}
+        return await open_image(self.ctx.files, file_ref, Path(self.ctx.paths.runtime_dir))
 
     @Tool(
         "dsh_export",

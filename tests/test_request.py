@@ -34,7 +34,7 @@ class ScopedFiles:
         self.lists.append((self.scope, offset))
         return list(self.assets[self.scope].values())[offset : offset + 50]
 
-    async def upload(self, path, *, name):
+    async def upload(self, path, *, name, mime_type="application/octet-stream"):
         if self.scope is None:
             raise PermissionError("No real Host file scope")
         data = Path(path).read_bytes()

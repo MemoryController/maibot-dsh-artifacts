@@ -4,6 +4,10 @@
 
 部署基线：MaiBot 在 Linux Docker 容器中，DSH 以宿主机普通用户运行，已有 SSH ACP 连接及工具回连。插件不配置 SSH、不启动 DSH、不增加网络服务。SDK 须是实际 Runner 环境中的 v2.19.0；不同镜像的依赖安装方式以该镜像现有管理方式为准，不要只在宿主机 pip 安装后假设容器里可用。
 
+0.3.0 图片功能另需在**实际 Runner 的 Python 环境**安装根目录 `requirements.txt`（Pillow ≥12.3、<14），并保留 `image_safety.py`、`image_open.py`。按现有依赖安装/持久化机制部署，不修改官方源码；安装依赖不等于重建修改核心的镜像。Python 3.10 自动选择 Pillow 12.x，13.x 需要 Python ≥3.11。manifest 已声明该 Python 包依赖，不假设 Host 会自动下载所有依赖。
+
+先在原聊天完成附件导入，再调用 `dsh_open_image(file_ref)`；历史 octet-stream 图片不必重传。该工具不需要新增能力授权、端口或挂载，仍使用 files.list/download 和 Host 正常工具返回机制。主模型要直接看到图片，还需沿用 MaiBot 视觉配置和支持图片的模型；后续图生图插件是否读取工具媒体索引须单独核对，详见[图片验收步骤](images.md)。
+
 若使用 DSH Cordis 配套插件，固定当前 main **0.2.1** 的 `f008cdc039122d360dee67b86e1e2004083ba019`，它要求 Linux、Node ≥24、DSH runtime **0.2.2-alpha.2**；包版本不是运行时版本。先在现有宿主环境核对 `node --version`、`dsh --version`，保留当前 runtime/DSH_HOME/profile，不擅自重装或重置。核查时配套仓库无 tags，不把 main/package 号当 Release。旧 DSH 插件 0.2.0 的 `0958d8ac…` 有已修复的发布状态缺陷，不建议回滚处理未知任务。
 
 配套 0.2.1 默认 manifest 确认模式兼容 MaiBot 插件当前 main 0.2.1 和历史 0.2.0；显式 request 模式必须有当前 0.2.1 的请求工具及 `request.py`。完整固定组合见[兼容说明](compatibility.md)。安装/更新配套插件后，按现有维护流程核查在途任务再重新连接 ACP 进程；安装新文件不代表旧进程已经加载。

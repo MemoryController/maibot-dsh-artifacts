@@ -7,17 +7,27 @@ QQ transport are doubles. SQLite/file registration/HTTP bytes are real. The
 image consumer is a representative test consumer, not an installed image plugin.
 No historical Host integration/patch is imported or applied.
 
+The media checks additionally compile unchanged method ASTs from the pinned
+ComponentQueryService/MaisakaReasoningEngine sources. They use the real Host
+ToolContentItem, ImageComponent, ToolResultMediaMessage, context projection and
+image resolver. This source-method harness is not the complete Host dispatcher.
+
 Run explicitly; these checks are separate from the mock-based default suite:
 MAIBOT_SOURCE_PATH=... DSH_ARTIFACTS_SOURCE=... python -m pytest -q host_checks/stock_files.py
 """
 
 from __future__ import annotations
 
+import ast
 import asyncio
+import base64
+import binascii
 import contextvars
+import hashlib
 import importlib
 import importlib.metadata
 import importlib.util
+import inspect
 import io
 import json
 import logging
@@ -28,14 +38,19 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
+from datetime import datetime
+from html import escape
 from importlib.metadata import version
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from maibot_sdk import PluginContext
 from maibot_sdk.context import PluginPaths
 from PIL import Image
+
+from host_checks.media_methods import source_class
 
 HOST_COMMIT = "2a9af62cec37035d29237acbe2cf3adceb700b27"
 DSH_COMMIT = "f008cdc039122d360dee67b86e1e2004083ba019"
@@ -78,7 +93,7 @@ def official_modules():
         config = ModuleType("src.config.config")
         config.global_config = SimpleNamespace(capabilities=SimpleNamespace(files=True))
         patch.setitem(sys.modules, config.__name__, config)
-        modules = SimpleNamespace(dsh=dsh)
+        modules = SimpleNamespace(dsh=dsh, source=host)
         for name in ("config", "models", "store", "service", "capability", "http", "provider"):
             setattr(modules, name, importlib.import_module("src.files." + name))
         modules.tooling = importlib.import_module("src.core.tooling")
@@ -371,3 +386,214 @@ async def test_real_file_service_unknown_send_not_repeated(connected):
         await s.plugin.dsh_import_handoff(manifest, send=True)
     assert len(s.deliveries) == 2 and s.http.uploads == 2
     assert all(session_id == "original-chat" for _, _, session_id in s.deliveries)
+
+
+@pytest.fixture(scope="module")
+def official_media(official_modules):
+    """Real media data types/resolver, plus exact isolated source methods.
+
+    Only the unused SessionMessage class is doubled to avoid importing the
+    full message processing/database boot graph. ToolResultMediaMessage and
+    every exercised media conversion/resolution implementation are official.
+    """
+    host = official_modules
+    with pytest.MonkeyPatch.context() as patch:
+        session_module = ModuleType("src.chat.message_receive.message")
+        session_module.SessionMessage = type("UnusedSessionMessageDouble", (), {})
+        patch.setitem(sys.modules, session_module.__name__, session_module)
+        components = importlib.import_module("src.common.data_models.message_component_data_model")
+        messages = importlib.import_module("src.maisaka.context.messages")
+        items = importlib.import_module("src.llm_models.payload_content.context_item")
+        options = importlib.import_module("src.llm_models.payload_content.tool_option")
+        attachment = importlib.import_module("src.maisaka.context.image_attachment")
+        codec = importlib.import_module("src.plugin_runtime.protocol.codec")
+        envelope = importlib.import_module("src.plugin_runtime.protocol.envelope")
+        transport = importlib.import_module("src.plugin_runtime.transport.base")
+        spec = importlib.util.spec_from_file_location(
+            "stock_host_media_core", host.source / "src/plugin_runtime/capabilities/core.py"
+        )
+        core = importlib.util.module_from_spec(spec)
+        patch.setitem(sys.modules, spec.name, core)
+        spec.loader.exec_module(core)
+        converter = source_class(
+            host.source / "src/plugin_runtime/component_query.py",
+            "ComponentQueryService",
+            ("_parse_tool_invoke_result", "_parse_tool_content_items"),
+            {"Any": Any, "cast": cast, **vars(host.tooling)},
+        )
+        engine_source = host.source / "src/maisaka/reasoning_engine.py"
+        engine_tree = ast.parse(engine_source.read_text())
+        media_types = next(
+            node.value for node in engine_tree.body
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "TOOL_RESULT_MEDIA_TYPES" for target in node.targets)
+        )
+        engine = source_class(
+            engine_source,
+            "MaisakaReasoningEngine",
+            (
+                "__init__", "_iter_tool_result_media_items", "_build_tool_result_media_index",
+                "_get_tool_result_media_metadata_value", "_build_xml_attrs", "_build_tool_result_media_xml_attrs",
+                "_describe_tool_result_media_item", "_build_tool_result_history_content",
+                "_decode_tool_result_base64_data",
+                "_build_tool_result_media_message_sequence", "_build_tool_result_media_visible_text",
+                "_build_tool_result_media_messages",
+            ),
+            {
+                "Any": Any, "datetime": datetime, "escape": escape, "b64decode": base64.b64decode,
+                "BinasciiError": binascii.Error, "TOOL_RESULT_MEDIA_TYPES": ast.literal_eval(media_types),
+                "ToolResultMediaMessage": messages.ToolResultMediaMessage,
+                "MessageSequence": components.MessageSequence, "TextComponent": components.TextComponent,
+                "ImageComponent": components.ImageComponent,
+            },
+        )
+        assert tuple(inspect.signature(converter._parse_tool_invoke_result).parameters) == ("entry", "result")
+        assert tuple(inspect.signature(converter._parse_tool_content_items).parameters) == ("raw_items",)
+        assert tuple(inspect.signature(engine._build_tool_result_media_messages).parameters) == (
+            "self", "tool_call", "result",
+        )
+        assert tuple(inspect.signature(attachment.resolve_context_image).parameters) == (
+            "runtime", "source_id", "image_index",
+        )
+        yield SimpleNamespace(
+            components=components, messages=messages, items=items, options=options,
+            attachment=attachment, core=core, converter=converter, engine=engine,
+            codec=codec, envelope=envelope, max_frame_size=transport.MAX_FRAME_SIZE,
+        )
+
+
+def convert_open_result(media, opened, call_id="actual-host-call-123"):
+    """Execute the actual pinned parsing/projection methods, no index guess."""
+    envelope = media.envelope.Envelope(
+        request_id=1, message_type=media.envelope.MessageType.RESPONSE,
+        method="plugin.invoke_tool", plugin_id=PLUGIN_ID,
+        payload=media.envelope.InvokeResultPayload(success=True, result=opened).model_dump(),
+    )
+    codec = media.codec.MsgPackCodec()
+    wire = codec.encode_envelope(envelope)
+    assert len(wire) <= media.max_frame_size
+    decoded = codec.decode_envelope(wire)
+    entry = SimpleNamespace(name="dsh_open_image", plugin_id=PLUGIN_ID)
+    result = media.converter._parse_tool_invoke_result(entry, decoded.payload["result"])
+    runtime = SimpleNamespace(session_id="original-chat", _chat_history=[])
+    engine = media.engine(runtime)
+    call = media.options.ToolCall(call_id=call_id, func_name="dsh_open_image", args={})
+    messages = engine._build_tool_result_media_messages(call, result)
+    runtime._chat_history.extend(messages)  # Harness inserts exactly the official generated messages.
+    return SimpleNamespace(result=result, runtime=runtime, engine=engine, call=call, messages=messages)
+
+
+@pytest.mark.parametrize("mode", ["manifest", "request"])
+async def test_open_image_real_download_and_official_tool_media_projection(connected, official_media, mode):
+    s, media = connected, official_media
+    submitted = publish(s, mode)
+    with s.invocation():
+        imported = await execute(s, submitted)
+    file_ref = imported["items"][0]["file"]["file_ref"]
+    assert s.store.get(file_ref, "original-chat").mime_type == "image/png"
+    with s.invocation():
+        opened = await s.plugin.dsh_open_image(file_ref)
+    assert opened["success"] and s.http.uploads == 2 and not s.deliveries
+    assert not list(s.runtime.iterdir())
+    raw = (s.shared / "outbox/中文 图片.png").read_bytes()
+    expected_base64 = base64.b64encode(raw).decode("ascii")
+    converted = convert_open_result(media, opened)
+    assert converted.result.success and len(converted.result.content_items) == 1
+    item = converted.result.content_items[0]
+    assert isinstance(item, s.host.tooling.ToolContentItem)
+    assert item.content_type == "image" and item.mime_type == "image/png" and item.data == expected_base64
+    assert expected_base64 not in converted.result.get_history_content()
+    history = converted.engine._build_tool_result_history_content(converted.call, converted.result)
+    assert 'msg_id="tool_result:actual-host-call-123:1"' in history and expected_base64 not in history
+    assert len(converted.messages) == 1
+    message = converted.messages[0]
+    assert isinstance(message, media.messages.ToolResultMediaMessage)
+    assert message.source_kind == "tool_result_media" and message.session_id == "original-chat"
+    assert not isinstance(message, media.messages.SessionBackedMessage) and not message.count_in_context
+    assert not hasattr(message, "user_info") and not hasattr(message, "original_message")
+    assert message.message_id == "tool_result:actual-host-call-123:1"
+    images = [component for component in message.raw_message.components
+              if isinstance(component, media.components.ImageComponent)]
+    assert len(images) == 1 and images[0].binary_data == raw
+    assert images[0].binary_hash == hashlib.sha256(raw).hexdigest()
+    projected = message.to_context_item(enable_visual_message=True)
+    image_parts = [part for part in projected.parts if isinstance(part, media.items.ContextImagePart)]
+    assert len(image_parts) == 1 and image_parts[0].image_base64 == expected_base64
+    assert not [part for part in message.to_context_item(enable_visual_message=False).parts
+                if isinstance(part, media.items.ContextImagePart)]
+
+
+async def test_legacy_octet_stream_image_with_binary_filename_opens_without_reupload(connected, official_media):
+    s, media = connected, official_media
+    publish(s)  # Create the valid PNG bytes; do not import the submitted task.
+    path = s.shared / "outbox/中文 图片.png"
+    with s.invocation():
+        asset = await s.ctx.files.upload(path, name="历史附件.bin", mime_type="application/octet-stream")
+    assert s.store.get(asset["file_ref"], "original-chat").mime_type == "application/octet-stream"
+    with s.invocation():
+        opened = await s.plugin.dsh_open_image(asset["file_ref"])
+    converted = convert_open_result(media, opened)
+    assert converted.result.success and converted.result.content_items[0].mime_type == "image/png"
+    image = await media.attachment.resolve_context_image(converted.runtime, converted.messages[0].message_id)
+    assert image.binary_data == path.read_bytes()
+    assert len(await listing(s)) == 1 and s.http.uploads == 1 and not s.deliveries
+
+
+async def test_official_sdk_context_image_resolver_accepts_generated_media_index(
+    connected, official_media, monkeypatch,
+):
+    s, media = connected, official_media
+    submitted = publish(s)
+    with s.invocation():
+        imported = await execute(s, submitted)
+        opened = await s.plugin.dsh_open_image(imported["items"][0]["file"]["file_ref"])
+    converted = convert_open_result(media, opened, call_id="real-call-456")
+    manager_module = ModuleType("src.chat.heart_flow.heartflow_manager")
+    manager_module.heartflow_manager = SimpleNamespace(heartflow_chat_list={
+        "original-chat": converted.runtime,
+        "another-chat": SimpleNamespace(session_id="another-chat", _chat_history=[]),
+    })
+    monkeypatch.setitem(sys.modules, manager_module.__name__, manager_module)
+    seen = []
+
+    async def resolve_rpc(method, plugin_id, payload, **kwargs):
+        assert method == "cap.call" and plugin_id == "test-image-consumer"
+        assert payload["capability"] == "maisaka.context.resolve_image"
+        seen.append(payload["args"])
+        return await media.core.RuntimeCoreCapabilityMixin()._cap_maisaka_context_resolve_image(
+            plugin_id, payload["capability"], payload["args"],
+        )
+
+    consumer = PluginContext("test-image-consumer", resolve_rpc)
+    resolved = await consumer.maisaka.context.resolve_image("original-chat", converted.messages[0].message_id)
+    assert resolved["success"]
+    image = resolved["image"]
+    raw = (s.shared / "outbox/中文 图片.png").read_bytes()
+    assert base64.b64decode(image["binary_data_base64"], validate=True) == raw
+    assert image["binary_hash"] == hashlib.sha256(raw).hexdigest()
+    # This official capability selects an already-existing runtime by stream_id;
+    # it is not a file-scope authorization API. The bridge does not request it.
+    wrong_history = await consumer.maisaka.context.resolve_image("another-chat", converted.messages[0].message_id)
+    missing = await consumer.maisaka.context.resolve_image("original-chat", "tool_result:missing:1")
+    wrong_index = await consumer.maisaka.context.resolve_image(
+        "original-chat", converted.messages[0].message_id, index=1,
+    )
+    assert not wrong_history["success"] and not missing["success"] and not wrong_index["success"]
+    assert not [result for result in (wrong_history, missing, wrong_index) if "image" in result]
+    assert len(seen) == 4 and not s.deliveries and s.http.uploads == 2
+
+
+async def test_open_image_other_chat_and_outside_scope_produce_no_media(connected, official_media):
+    s, media = connected, official_media
+    submitted = publish(s)
+    with s.invocation():
+        imported = await execute(s, submitted)
+    file_ref = imported["items"][0]["file"]["file_ref"]
+    with s.invocation("another-chat"):
+        forbidden = await s.plugin.dsh_open_image(file_ref, session_id="original-chat", chat_id="original-chat")
+    unscoped = await s.plugin.dsh_open_image(file_ref)
+    for result in (forbidden, unscoped):
+        assert not result["success"] and not result.get("content_items")
+        converted = convert_open_result(media, result)
+        assert not converted.result.success and not converted.messages
+    assert s.http.uploads == 2 and not s.deliveries and not list(s.runtime.iterdir())

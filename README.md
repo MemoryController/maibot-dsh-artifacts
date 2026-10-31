@@ -2,7 +2,7 @@
 
 MaiBot + DSH 的文件桥接插件：将 DSH 在共享目录生成的图片、PDF、压缩包等二进制产物登记为**当前聊天的正式附件**，也可把当前聊天已有附件导出给 DSH。
 
-当前维护版本 **0.2.1** 适配原版 **MaiBot v1.3.18**、**maibot-plugin-sdk v2.19.0**，使用 [MIT](LICENSE)。本轮基于已合并的 main `8018552bc82ee5fada38f6792a1721410adf5bc8`。无需修改 MaiBot 源码、应用 Host 补丁或重建修改源码的镜像；可使用标准库 CLI，也可配合可选的 [DSH Cordis 插件](https://github.com/MemoryController/dsh-maibot-artifacts)。无需 Docker Socket、root、管理员 Token 或额外 HTTP 服务。manifest 暂仅声明已核对的版本，不外推后续版本兼容性。包内版本号不代表正式 Release。
+当前开发候选版本 **0.3.0** 适配原版 **MaiBot v1.3.18**、**maibot-plugin-sdk v2.19.0**，使用 [MIT](LICENSE)。本轮基于已合并的 main `8365fcedc93fcb6dcc2bc9f92ed7a65e53d474d2`（0.2.1）。新增图片上下文工具，Runner 需要 **Pillow ≥12.3、<14**。无需修改 MaiBot 源码、应用 Host 补丁或重建修改源码的镜像；可使用标准库 CLI，也可配合可选的 [DSH Cordis 插件](https://github.com/MemoryController/dsh-maibot-artifacts)。无需 Docker Socket、root、管理员 Token 或额外 HTTP 服务。manifest 暂仅声明已核对的版本，不外推后续版本兼容性。包内版本号不代表正式 Release。
 
 ## 工作方式与限制
 
@@ -16,6 +16,8 @@ DSH 产物 → 共享 outbox → CLI 生成 manifest
 ```
 
 **原版 ACP MCP 服务不暴露第三方插件工具。** DSH 不能直接调用本插件工具。`agent_talk` 只把文本排入原聊天 Planner，模型仍须实际选择工具；本插件不监听目录、不后台上传，也不把排队成功说成上传成功。接口依据见[兼容说明](docs/compatibility.md)。
+
+**附件入库与图片上下文是两个步骤。** 0.3.0 按真实内容解码识别 PNG/JPEG/WebP 的上传 MIME；导入不会自动塞入图片。需要模型看图或图生图时，在同聊天调用 `dsh_open_image(file_ref)`：它通过官方文件授权下载已有附件，再返回 Tool 的 image 内容项，由 Host 构造真实图片组件和媒体索引。支持历史 octet-stream 图片，无需重新上传。具体图片编辑插件还须支持该媒体索引，不能把文件引用直接当 QQ 图片消息 ID。完整说明与人工验收见[图片上下文](docs/images.md)。
 
 请分别检查这些证据：
 
@@ -56,7 +58,7 @@ DSH 插件包版本与 DSH CLI 版本是两回事。当前 DSH 插件 main 为 *
 ## 安装与配置
 
 1. 将仓库放到 MaiBot 实例的 `plugins/maibot-dsh-artifacts/`，保留根目录源码及 `_manifest.json`。验收期间使用待测 PR 的固定提交，正式部署选择审核后的提交。
-2. 确认插件 Runner 实际使用的 Python 环境安装 SDK v2.19.0；只在宿主机安装、Runner 却在容器内，不足以满足依赖。
+2. 确认插件 Runner 实际使用的 Python 环境安装 SDK v2.19.0 和 `requirements.txt` 中的 Pillow。按现有镜像/Runner 依赖管理方式安装；只在宿主机安装、Runner 却在容器内，不足以满足依赖。Python 3.10 的 pip 会选择兼容的 Pillow 12.x，13.x 要求 Python ≥3.11。
 3. 启用主程序文件功能：WebUI「能力 → 文件功能」或 `[capabilities] files = true`。授权 manifest 的 `files.list`、`files.upload`、`files.download`、`files.send`。
 4. 保留 `/srv/maibot-agent:/srv/maibot-agent` 共享挂载，准备真实 `inbox` / `outbox` 目录，给予 DSH 与实际 Runner 合适的 UID/GID 权限。
 5. 首次加载由 Runner 生成本地 `config.toml`，或参考 [`config.example.toml`](config.example.toml)，实际配置不入 Git：
@@ -102,6 +104,8 @@ DSH 0.2.1 显式配置 `confirmationMode: request` 时，会在 publish 结果�
 
 按顺序独立处理，保留原名。安全读取并制作私有快照后调用官方 `ctx.files.upload()`。结果包含整体 `success` 和逐项 `items`；成功项 `status="imported"`，`file` 包含 file_ref、文件名、大小、SHA-256 等元数据。部分失败不回滚成功项，不整批自动重试。
 
+三个导入入口共用内容识别：只有通过完整解码与展示限制的静态 PNG/JPEG/WebP 才以真实 image MIME 上传；伪造后缀、损坏、动画、其他格式或超展示限制的文件仍可作为普通 octet-stream 附件导入。文件字节和原始文件名不改变，不因 MIME 识别重传已有任务。
+
 这是简便接口，没有任务账本去重；同一路径重复调用可能创建新附件。需要可查询交接时优先使用下一工具。
 
 ### `dsh_import_handoff(manifest, send=false)`：推荐交接入口
@@ -141,6 +145,18 @@ DSH 0.2.1 显式配置 `confirmationMode: request` 时，会在 publish 结果�
 无已知引用、引用缺失/删除、分页未完成或权限未证实时，返回中性 `unconfirmed`，不透露缓存路径和元数据。它不代表“从未调用”或“肯定没上传”。同一 file_ref 可被管理员合法绑定多个聊天，因此核验只证明当前访问权，不能证明原请求聊天身份，也不据此恢复副作用。
 
 缓存查询只读打开账本，不修改磁盘内容或 mtime；仅返回已授权文件元数据和最小登记状态，不回原输入路径或发送记录。`delivery` 保守为 `unconfirmed`，发送任务的缓存 `success=false`；即使首次调用曾返回 sent，也须在原聊天核对原始回执，不能通过缓存证明另一聊天的投递。
+
+### `dsh_open_image(file_ref)`：按需加载真实图片上下文
+
+```json
+{"file_ref":"0123456789abcdef0123456789abcdef"}
+```
+
+只读取当前聊天已授权的 ready 附件，先检查大小，再用官方 `ctx.files.download()` 下载到私有暂存并严格验证真实内容。固定限制：编码文件 ≤8 MiB、像素 ≤1600 万、单边 ≤8192、单帧 PNG/JPEG/WebP；结果 JSON ≤12 MiB，为 Host 16 MiB RPC 帧预留空间。验证、解码和编码在有界线程工作中完成，取消后等待清理。
+
+成功返回简短 `content`、原 `file_ref`、图片元数据和唯一的 `content_items[type=image]`。Base64 只在结构化媒体项中；Host 生成 `tool_result:<真实 call_id>:1`，不能由插件/模型猜测。后续工具用实际媒体索引，图片内 index 为 0。没有上传、QQ 发送、任意路径或聊天目标参数；反复打开会生成新的工具媒体项，但不会创建新附件。
+
+原版官方图片解析接口支持该索引；已核对的 `maimai-drawpic-plugin v2.1.3` **不支持**工具媒体索引，且消息查图失败可能回退到最近的另一张图。不得把该索引填进它的 `source_message_id`。它也未声明支持 SDK 2.19.0；须由该插件明确适配后才能把此链路称为可用图生图。[固定源码证据、所需接口和验收步骤](docs/images.md)。
 
 ### `dsh_export(file_ref, target)`：导出给 DSH
 
@@ -186,9 +202,11 @@ python3 -m venv .venv
 .venv/bin/python -m ruff check .
 ```
 
-本轮 Python 3.12 实际执行：默认回归套件 **331 项通过**；双版本 DSH 协议检查各 **12 项，共 24 项通过**；新增隔离官方 Host 文件组件检查 **8 项通过**，均无失败、无跳过。Ruff 与 diff 检查通过。此前 PR #2 的 303/12 是历史基线。
+本轮 Python 3.12 / Pillow 13.0 实际执行：默认回归套件 **430 项通过**；双版本 DSH 协议检查各 **12 项，共 24 项通过**；隔离官方文件与媒体组件检查 **13 项通过**，均无失败、无跳过。另在 Pillow 12.3 下运行图片专项 **99 项**和官方组件 **13 项**均通过，不将重复运行相加。Ruff 与 diff 检查通过。此前 PR #3 的 331/24/8 是历史基线。
 
-默认套件和协议检查使用模拟 Files API；[官方组件检查](host_checks/README.md)实际运行未修改的 FileService/FileStore/HTTP/provider、官方 SDK 和临时 SQLite，测试夹具签发 scope，验证临时库的真实 file_ref、内置 files_list、官方下载、代表性 Pillow 图片处理、跨聊天拒绝与未知回执不重传。**它没有执行真实 Host dispatcher/Runner、ACP、Docker、QQ 或已安装的图片工具**。固定版本及命令见[兼容说明](docs/compatibility.md)；CI 独立运行三层检查，远端结论以对应提交记录为准。
+另有指定 `maimai-drawpic-plugin v2.1.3` 实际源码的 **2 项负向契约检查通过**：证明 schema 不接受媒体索引，且错误填入 source_message_id 会回退到近期另一张图。它证明的是兼容缺口，**不是 edit_image 已适配**；复现命令见[图片文档](docs/images.md)。
+
+默认套件和协议检查使用模拟 Files API；[官方组件检查](host_checks/README.md)实际运行未修改的 FileService/FileStore/HTTP/provider、官方 SDK 和临时 SQLite，测试夹具签发 scope，验证临时库的真实 file_ref、内置 files_list、官方下载、跨聊天拒绝与未知回执不重传。媒体部分使用原样抽取的官方转换方法、真实 ImageComponent、上下文投影及完整官方图片解析器验证 Tool 媒体链路。**它没有执行完整 Host 模块/dispatcher/Runner、ACP、Docker、QQ 或已安装的图片编辑工具**。固定版本及命令见[兼容说明](docs/compatibility.md)；CI 独立运行三层检查，远端结论以对应提交记录为准。
 
 `integrations/` 中保留的 Host 补丁是历史实验，**不支持部署，不属于正式安装步骤**；默认 pytest/CI 不运行实验测试。本轮未运行旧 Host 实验，也未修改官方源码。不要使用生产源码或数据作测试目标。
 

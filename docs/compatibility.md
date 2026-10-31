@@ -1,6 +1,6 @@
 # 官方接口调查与验证边界
 
-当前 0.2.1 使用原版 MaiBot 插件能力，不应用 Host 补丁。本轮基于已合并 PR #2 的 main [`8018552bc82ee5fada38f6792a1721410adf5bc8`](https://github.com/MemoryController/maibot-dsh-artifacts/tree/8018552bc82ee5fada38f6792a1721410adf5bc8)。历史 0.2.0 基准为 [`ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8`](https://github.com/MemoryController/maibot-dsh-artifacts/tree/ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8)。0.2.1 的请求确认入口已在当前 main；本轮只优化可选接力，不改变 manifest v1、账本或文件权限。固定官方源码依据：
+本轮 0.3.0 候选版使用原版 MaiBot 插件能力，不应用 Host 补丁，基于已合并 PR #3 的 main [`8365fcedc93fcb6dcc2bc9f92ed7a65e53d474d2`](https://github.com/MemoryController/maibot-dsh-artifacts/tree/8365fcedc93fcb6dcc2bc9f92ed7a65e53d474d2)（0.2.1）。增加按内容识别图片 MIME、Pillow 依赖与 `dsh_open_image`，不改变 manifest v1、账本或文件权限。历史 0.2.0 基准为 [`ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8`](https://github.com/MemoryController/maibot-dsh-artifacts/tree/ba8a5fb4dc9857982f9cf5518b746ed0f9c282c8)。固定官方源码依据：
 
 | 项目 | 提交 |
 | --- | --- |
@@ -28,6 +28,10 @@ manifest v2 仅声明已核对 Host/SDK 版本及实际需要的 files.list/uplo
 | 历史 0.2.0 0958d8ac…，默认 request | 历史 0.2.0 ba8a5fb… | 默认交互不兼容；只能人工把完整 manifest 交给已有 dsh_import_handoff |
 
 [PR #2](https://github.com/MemoryController/maibot-dsh-artifacts/pull/2) 已合并为上述 main；其[审阅记录](pr-2-review.md)保留当时事实。本轮[自动化调查](automation-research.md)与[可选流程](automation.md)以当前 main 为基准，未创建 Release。
+
+0.3.0 保留上述 0.2.1 的共享交接协议兼容性；新增 `dsh_open_image` 只存在于 0.3.0，不要求升级 DSH 配套包。Pillow ≥12.3、<14 是新增 Runner 依赖，Python 3.10 由 pip 选择兼容 12.x。图片 MIME 只用于完整验证的静态 PNG/JPEG/WebP，图片上下文在原聊天后续工具调用中按需返回。历史 octet-stream 图片不需要重传或改登记信息；具体链路和下游图片工具条件见[图片上下文](images.md)。
+
+用户指定 `WhiteCloudOL/maimai-drawpic-plugin v2.1.3`（`56284ac…`）**不属于已支持的图生图组合**：其 schema 没有工具媒体输入，SDK 声明上限为 2.17.0，错误把索引填成 source_message_id 还可能回退到近期其他图片。源码及独立 2 项负向检查见[图片文档](images.md)，未修改第三方插件。Host 支持工具媒体解析不等于该图片插件支持。
 
 ### 精确字节协议与状态
 
@@ -101,7 +105,7 @@ SnowLuma 文件须结构化登记。Host [`integration.py:378`](https://github.c
 
 文件能力默认关闭、HTTP 通道独立于 WebUI及 unknown 语义见官方 [docs/file-service.md](https://github.com/Mai-with-u/MaiBot/blob/2a9af62cec37035d29237acbe2cf3adceb700b27/docs/file-service.md)。SDK download 没有客户端 max_bytes 参数，插件导出限额在下载完成后检查；Host 配额和暂存空间仍必要。
 
-本轮 Python 3.12 默认套件实际运行 **331 passed，无失败、无跳过**，Ruff 和 diff 检查通过。此前 PR #2 的 303 是历史基线；当前默认套件分层如下：
+本轮 Python 3.12 默认套件实际运行 **430 passed，无失败、无跳过**，Ruff 和 diff 检查通过。此前 PR #2 的 303、PR #3 的 331 是历史基线；当前默认套件分层如下：
 
 | 范围 | 数量 | 验证方式 |
 | --- | ---: | --- |
@@ -109,12 +113,13 @@ SnowLuma 文件须结构化登记。Host [`integration.py:378`](https://github.c
 | 纯插件交接账本 | 83 | 严格清单、快照哈希、claim/未知状态、缓存权限、只读重放、独立哨兵等 |
 | DSH helper | 76 | 标准库 CLI、清单准备/relay/relay-request、严格请求与准确原字节 SHA、失败无输出，包含不加载 site 的实际子进程检查 |
 | 请求文件确认及新插件/安装接线 | 69 | 实际 request/Handoff/SQLite/安全快照、严格 JSON/哈希/链接/篡改、取消清理、只读重放、部分成功、阶段字段及无 Host 补丁安装 |
+| 图片安全与按需打开 | 99 | 真正 PNG/JPEG/WebP 解码、伪后缀/损坏/动画、WebP 原生解码前尺寸校验、字节/像素/边长/帧预算、当前文件授权与取消清理、三个导入入口 MIME |
 
-原版 MaiBot v1.3.18 官方 ManifestValidator 对未改变的 0.2.1 manifest 实际校验通过，无 errors/warnings。安装测试实际把五个插件运行文件复制到**不存在任何 Host 源码**的临时 plugins 目录，以真实 SDK 完成 import/create_plugin/on_load，证明普通安装不依赖 Host 改动。默认套件的 ctx.files API 使用 mock，不是实际 Host 文件服务、DSH 或 QQ 集成。
+原版 MaiBot v1.3.18 官方 ManifestValidator 对 0.3.0 manifest 与 Pillow 包依赖实际校验通过，无 errors/warnings。安装测试实际把插件运行文件和 manifest 复制到**不存在任何 Host 源码**的临时 plugins 目录，以真实 SDK 完成 import/create_plugin/on_load，证明普通安装不依赖 Host 改动。默认套件的 ctx.files API 使用 mock，不是实际 Host 文件服务、DSH 或 QQ 集成。
 
-独立跨语言测试 [protocol_checks/dsh_protocol.py](../protocol_checks/dsh_protocol.py) 对真实 DSH dist 执行 ArtifactService 与文件系统操作，再将准确原字节交给真实 Python request/Handoff/SQLite；Files API 是 scope double。固定 DSH 0.2.0 `0958d8ac…`、0.2.1 `f008cdc…` 各 **12 passed，共 24**，不混入默认 331。覆盖中文/emoji、有效 PNG/空文件/二进制、原字节 SHA、默认模式、真实 CLI 参数接力、零自动通知/未调用不入库、重复/重启、跨聊天拒绝、丢失回执不重传和字节篡改。这不是启动真实 DSH/ACP 会话。
+独立跨语言测试 [protocol_checks/dsh_protocol.py](../protocol_checks/dsh_protocol.py) 对真实 DSH dist 执行 ArtifactService 与文件系统操作，再将准确原字节交给真实 Python request/Handoff/SQLite；Files API 是 scope double。固定 DSH 0.2.0 `0958d8ac…`、0.2.1 `f008cdc…` 各 **12 passed，共 24**，不混入默认 430。覆盖中文/emoji、有效 PNG/空文件/二进制、原字节 SHA、默认模式、真实 CLI 参数接力、零自动通知/未调用不入库、重复/重启、跨聊天拒绝、丢失回执不重传和字节篡改。这不是启动真实 DSH/ACP 会话。
 
-另有[隔离官方 Host 文件组件检查](../host_checks/README.md) **8 passed**：实际运行固定 DSH 0.2.1 dist、官方 SDK、回环 HTTP、原版 FileService/FileStore/capability/provider 和临时 SQLite。测试夹具代替 dispatcher 签发/撤销真实 file ticket，临时聊天注册表和 QQ transport 为 doubles；验证官方临时引用与 files_list、SDK 下载后 Pillow 图片处理、scope 拒绝、重复/重建、HTTP 回执丢失/取消及 unknown 不补发。它不证明真实聊天派发、目标图片插件、Agent 路由或 QQ 投递。产品代码未增加 HTTP 服务。
+另有[隔离官方文件/媒体组件检查](../host_checks/README.md) **13 passed**：实际运行固定 DSH 0.2.1 dist、官方 SDK、回环 HTTP、原版 FileService/FileStore/capability/provider 和临时 SQLite。测试夹具代替 dispatcher 签发/撤销真实 file ticket，临时聊天注册表和 QQ transport 为 doubles；验证官方临时引用与 files_list、SDK 下载、scope 拒绝、重复/重建、HTTP 回执丢失/取消及 unknown 不补发。图片结果经真实 RPC codec、原样抽取的官方转换方法、真实 ImageComponent/ToolResultMediaMessage 和完整官方解析能力处理器验证；包含历史 octet-stream 与视觉上下文投影。它不证明完整 Host 模块、真实聊天派发、目标图片插件、Agent 路由或 QQ 投递。产品代码未增加 HTTP 服务。
 
 复现独立协议检查时，需要 Node ≥24，使用不含本地改动的固定源码目录；脚本只读其 dist，不自行抓代码或重建包。例如在本仓库已有虚拟环境中：
 
