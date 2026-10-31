@@ -40,7 +40,7 @@ class RuntimeMock:
             raise PermissionError("outside actual tool scope")
         return list(self.assets[self.scope].values())[offset : offset + 50]
 
-    async def upload(self, source, name):
+    async def upload(self, source, name, mime_type="application/octet-stream"):
         if self.scope is None:
             raise PermissionError("expired scope")
         if self.before_upload:
@@ -55,7 +55,7 @@ class RuntimeMock:
             "name": name,
             "size": len(data),
             "sha256": hashlib.sha256(data).hexdigest(),
-            "mime_type": "application/octet-stream",
+            "mime_type": mime_type,
             "state": "ready",
             "url": "secret-signed-url",
             "session_id": self.scope,
@@ -190,6 +190,7 @@ async def test_binary_import_preserves_name_and_metadata(setup):
         "name": "报告.bin",
         "size": 8,
         "sha256": manifest["files"][0]["sha256"],
+        "mime_type": "application/octet-stream",
     }
     assert api.uploads == [("报告.bin", b"\x00\xffbinary")]
     assert not api.sends and not list(runtime.iterdir())
@@ -513,10 +514,10 @@ async def test_unknown_item_is_sanitized_when_another_item_authorizes_cache(setu
     (workspace / "outbox/private-unknown").write_bytes(b"\x00\xffbinary")
     original_upload = api.upload
 
-    async def partially_failed(source, name):
+    async def partially_failed(source, name, mime_type="application/octet-stream"):
         if name == "private-unknown":
             raise RuntimeError("secret failure details")
-        return await original_upload(source, name)
+        return await original_upload(source, name, mime_type=mime_type)
 
     api.upload = partially_failed
     first = await broker.import_manifest(manifest)

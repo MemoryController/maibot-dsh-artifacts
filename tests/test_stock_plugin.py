@@ -94,7 +94,7 @@ async def test_replay_and_status_cannot_select_chat_via_kwargs(stock):
         assert not any(ref in repr(value) for ref in refs)
         assert "报告" not in repr(value)
     assert stock.files.upload.await_count == 2
-    assert all(not call.kwargs.keys() - {"name"} for call in stock.files.upload.await_args_list)
+    assert all(not call.kwargs.keys() - {"name", "mime_type"} for call in stock.files.upload.await_args_list)
 
 
 @pytest.mark.asyncio
@@ -151,12 +151,20 @@ async def test_official_sdk_manifest_and_pure_plugin_install_without_host(tmp_pa
     root = Path(__file__).resolve().parents[1]
     destination = tmp_path / "plugins" / "maibot-dsh-artifacts"
     destination.mkdir(parents=True)
-    for name in ("plugin.py", "handoff.py", "request.py", "safe_files.py", "_manifest.json"):
+    for name in (
+        "plugin.py",
+        "handoff.py",
+        "request.py",
+        "safe_files.py",
+        "image_safety.py",
+        "image_open.py",
+        "_manifest.json",
+    ):
         shutil.copyfile(root / name, destination / name)
     # This install has no Host source, patch, installer or external service.
     assert not list(tmp_path.rglob("host.patch"))
     assert not (tmp_path / "src").exists()
-    for name in ("plugin.py", "handoff.py", "request.py", "safe_files.py"):
+    for name in ("plugin.py", "handoff.py", "request.py", "safe_files.py", "image_safety.py", "image_open.py"):
         tree = ast.parse((destination / name).read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
@@ -179,7 +187,7 @@ async def test_official_sdk_manifest_and_pure_plugin_install_without_host(tmp_pa
     plugin.set_plugin_config({"plugin": {"config_version": "1.0.0"}, "workspace": {"root": str(workspace)}})
     await plugin.on_load()  # Runs without Host sources or a file-capability scope.
     assert plugin.get_components()
-    for tool in ("dsh_import_request", "dsh_import_handoff", "dsh_handoff_status"):
+    for tool in ("dsh_import_request", "dsh_import_handoff", "dsh_handoff_status", "dsh_open_image"):
         info = getattr(installed.DSHArtifactsPlugin, tool).__maibot_component_info__
         assert info.metadata["visibility"] == "visible"
         assert "session_id" not in info.get_parameters_schema()["properties"]

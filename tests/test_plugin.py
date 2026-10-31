@@ -274,7 +274,7 @@ async def test_import_does_not_forward_invented_scope(bridge):
     (bridge.root / "outbox" / "a").write_bytes(b"a")
     result = await bridge.plugin.dsh_import(["outbox/a"], send=True, session_id="invented")
     assert result["success"] is True
-    assert bridge.files.upload.call_args.kwargs == {"name": "a"}
+    assert bridge.files.upload.call_args.kwargs == {"name": "a", "mime_type": "application/octet-stream"}
     assert not bridge.files.send.call_args.kwargs
 
 
@@ -299,7 +299,14 @@ async def test_real_sdk_tool_metadata_and_schema(plugin_module):
     plugin = plugin_module.create_plugin()
     components = plugin.get_components()
     tools = {item["name"]: item for item in components}
-    assert set(tools) == {"dsh_import", "dsh_export", "dsh_import_handoff", "dsh_handoff_status", "dsh_import_request"}
+    assert set(tools) == {
+        "dsh_import",
+        "dsh_export",
+        "dsh_import_handoff",
+        "dsh_handoff_status",
+        "dsh_import_request",
+        "dsh_open_image",
+    }
     for name in tools:
         info = getattr(plugin, name).__maibot_component_info__
         assert info.metadata["visibility"] == "visible"

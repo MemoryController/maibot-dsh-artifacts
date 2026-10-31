@@ -23,8 +23,10 @@ from pathlib import Path
 from typing import Any
 
 if __package__:
+    from .image_safety import detect_upload_mime
     from .safe_files import SafetyError, Workspace, _parts
 else:
+    from image_safety import detect_upload_mime
     from safe_files import SafetyError, Workspace, _parts
 
 _TASK = re.compile(r"[0-9a-f]{32}")
@@ -416,9 +418,12 @@ class Handoff:
                 stage = self.runtime_dir / ("dsh-handoff-" + secrets.token_hex(16))
                 try:
                     local = await _io(self._snapshot, declaration, stage)
+                    local["mime_type"] = await _io(detect_upload_mime, stage / "payload")
                     item["operation"] = "upload"
                     await self._save(result)
-                    remote = await self.files.upload(stage / "payload", name=local["name"])
+                    remote = await self.files.upload(
+                        stage / "payload", name=local["name"], mime_type=local["mime_type"]
+                    )
                     if (
                         not isinstance(remote, dict)
                         or not isinstance(remote.get("file_ref"), str)

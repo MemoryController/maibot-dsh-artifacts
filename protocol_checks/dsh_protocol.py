@@ -70,7 +70,7 @@ class ScopedFiles:
             raise PermissionError("No current Host scope")
         return list(self.assets[self.scope].values())[offset : offset + 50]
 
-    async def upload(self, path, *, name):
+    async def upload(self, path, *, name, mime_type="application/octet-stream"):
         content = Path(path).read_bytes()
         ref = f"{len(self.uploads) + 1:032x}"
         metadata = {

@@ -31,7 +31,7 @@ def bridge(plugin_module, tmp_path):
     runtime.mkdir(mode=0o700)
     uploads = []
 
-    async def upload(path, *, name):
+    async def upload(path, *, name, mime_type="application/octet-stream"):
         content = Path(path).read_bytes()
         uploads.append((Path(path), name, content))
         return {
@@ -39,7 +39,7 @@ def bridge(plugin_module, tmp_path):
             "name": name,
             "size": len(content),
             "sha256": hashlib.sha256(content).hexdigest(),
-            "mime_type": "application/octet-stream",
+            "mime_type": mime_type,
             "url": "https://private.invalid/signed-upload-url",
         }
 
